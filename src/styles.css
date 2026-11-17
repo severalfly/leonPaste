@@ -409,3 +409,28 @@ button { cursor: pointer; color: inherit; }
 }
 .probe-box.bad { border-color: #e06565; color: #e79a9a; }
 .probe-preview { word-break: break-all; opacity: 0.9; max-height: 54px; overflow: auto; }
+
+.empty-actions { display: flex; gap: 8px; margin-top: 12px; }
+.empty-actions button {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 11.5px;
+}
+.empty-actions button:hover { border-color: var(--accent); background: var(--surface-strong); }
+.probe-inline {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  max-width: 460px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+.probe-inline.bad { border-color: #e06565; color: #e79a9a; }

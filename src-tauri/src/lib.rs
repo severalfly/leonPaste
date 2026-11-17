@@ -27,6 +27,7 @@ pub struct AppState {
     pub settings: Mutex<Settings>,
     pub suppress: AtomicBool,
     pub last_tick: AtomicU64,
+    pub last_sig: Mutex<String>,
 }
 
 pub fn show_main(app: &tauri::AppHandle) {
@@ -151,6 +152,7 @@ pub fn run() {
                 settings: Mutex::new(settings),
                 suppress: AtomicBool::new(false),
                 last_tick: AtomicU64::new(0),
+                last_sig: Mutex::new(String::new()),
             });
 
             if autostart_on {
@@ -240,6 +242,7 @@ pub fn run() {
             commands::get_diagnostics,
             commands::open_data_dir,
             commands::probe_clipboard,
+            commands::sync_clipboard,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

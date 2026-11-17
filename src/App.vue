@@ -48,10 +48,17 @@ function openSettings() {
 async function openDir() {
   await invoke('open_data_dir')
 }
+function resetFilters() {
+  query.value = ''
+  filter.value = 'all'
+  favoritesOnly.value = false
+  refresh()
+}
 const searchEl = ref<HTMLInputElement | null>(null)
 const trackEl = ref<HTMLElement | null>(null)
 const unlisteners: Array<() => void> = []
 let shownAt = 0
+let syncTimer: number | undefined
 let dragging = false
 let moved = 0
 let startX = 0
@@ -239,28 +246,44 @@ watch([query, filter, favoritesOnly], () => {
 
 onMounted(async () => {
   await loadSettings()
+  await loadDiagnostics()
   await refresh()
   focusSearch()
   unlisteners.push(
-    await listen('history-changed', () => refresh()),
+    await listen('history-changed', () => {
+      refresh()
+      loadDiagnostics()
+    }),
     await listen('settings-changed', () => loadSettings()),
     await listen('window-shown', () => {
       shownAt = Date.now()
       query.value = ''
       filter.value = 'all'
+      favoritesOnly.value = false
       refresh()
+      loadDiagnostics()
       focusSearch()
       nextTick(() => {
         if (trackEl.value) trackEl.value.scrollLeft = 0
       })
     }),
   )
+  const tick = async () => {
+    try {
+      await invoke('sync_clipboard')
+    } catch {
+      /* WebView 未就绪时忽略，下一轮继续 */
+    }
+  }
+  await tick()
+  syncTimer = window.setInterval(tick, 500)
   window.addEventListener('keydown', onKey)
   window.addEventListener('blur', onBlur)
   window.addEventListener('focus', refresh)
 })
 
 onUnmounted(() => {
+  if (syncTimer) window.clearInterval(syncTimer)
   unlisteners.forEach((f) => f())
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('blur', onBlur)
@@ -338,8 +361,17 @@ onUnmounted(() => {
         </div>
         <div v-if="items.length === 0" class="empty">
           <div class="empty-mark">▤</div>
-          <p>还没有剪贴板记录</p>
-          <span>复制文本或截图后，会自动出现在这里</span>
+          <p v-if="diag && diag.entries > 0">有 {{ diag.entries }} 条记录，但被当前筛选隐藏了</p>
+          <p v-else>还没有剪贴板记录</p>
+          <span v-if="diag">
+            监听{{ diag.monitor_alive ? '正常' : '异常' }} · 读取 {{ diag.opens }} 次 · 捕获 {{ diag.captures }} 条 · v{{ diag.version }}
+          </span>
+          <span v-else>复制文本或截图后，会自动出现在这里</span>
+          <div class="empty-actions">
+            <button v-if="(diag && diag.entries > 0) || query || filter !== 'all' || favoritesOnly" @click="resetFilters">清除筛选</button>
+            <button @click="probeClipboard">检测剪贴板</button>
+          </div>
+          <div v-if="probe" class="probe-inline" :class="{ bad: probe.busy }">{{ probe.kind }} · {{ probe.preview }}</div>
         </div>
       </div>
       <button class="nav next" title="向右" @click="scrollBy(1)">›</button>

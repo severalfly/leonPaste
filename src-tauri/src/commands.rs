@@ -286,3 +286,11 @@ pub fn open_data_dir(app: tauri::AppHandle) {
     let dir = store::data_dir(&app);
     let _ = std::process::Command::new("explorer.exe").arg(dir).spawn();
 }
+
+/// 前端主线程定时调用：已证明主线程能稳定读到剪贴板，
+/// 与后台线程共享 last_sig 去重，作为主捕获路径的保险。
+#[tauri::command]
+pub fn sync_clipboard(app: tauri::AppHandle) -> bool {
+    let cap = clip::read();
+    crate::clipboard::process_capture(&app, cap)
+}
