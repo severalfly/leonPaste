@@ -141,6 +141,7 @@ pub fn to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
     Some(bmp)
 }
 
+#[allow(dead_code)]
 pub fn read_clipboard_dib() -> Option<Vec<u8>> {
     unsafe {
         if OpenClipboard(std::ptr::null_mut()) == 0 {

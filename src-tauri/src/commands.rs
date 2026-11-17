@@ -198,6 +198,10 @@ pub struct Diagnostics {
     pub paused: bool,
     pub portable: bool,
     pub log_tail: Vec<String>,
+    pub ticks: u64,
+    pub opens: u64,
+    pub busy: u64,
+    pub captures: u64,
 }
 
 fn secs_now() -> u64 {
@@ -239,6 +243,41 @@ pub fn get_diagnostics(app: tauri::AppHandle, state: State<'_, AppState>) -> Dia
         paused: settings.paused,
         portable,
         log_tail,
+        ticks: crate::stats::TICKS.load(std::sync::atomic::Ordering::Relaxed),
+        opens: crate::stats::OPENS.load(std::sync::atomic::Ordering::Relaxed),
+        busy: crate::stats::BUSY.load(std::sync::atomic::Ordering::Relaxed),
+        captures: crate::stats::CAPTURES.load(std::sync::atomic::Ordering::Relaxed),
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct ProbeResult {
+    pub kind: String,
+    pub signature: String,
+    pub preview: String,
+    pub busy: bool,
+    pub opens: u64,
+}
+
+#[tauri::command]
+pub fn probe_clipboard() -> ProbeResult {
+    let cap = clip::read();
+    let kind = cap.name().to_string();
+    let signature = cap.signature();
+    let busy = matches!(cap, clip::Capture::Busy);
+    let preview = match &cap {
+        clip::Capture::Text(t) => crate::types::preview(t),
+        clip::Capture::Files(f) => f.join(" | "),
+        clip::Capture::Dib(d) => format!("位图 {} 字节", d.len()),
+        clip::Capture::Empty => "剪贴板为空".into(),
+        clip::Capture::Busy => "剪贴板被其他程序占用，读取失败".into(),
+    };
+    ProbeResult {
+        kind,
+        signature,
+        preview,
+        busy,
+        opens: crate::stats::OPENS.load(std::sync::atomic::Ordering::Relaxed),
     }
 }
 

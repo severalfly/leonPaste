@@ -40,4 +40,16 @@ export interface Diagnostics {
   paused: boolean
   portable: boolean
   log_tail: string[]
+  ticks: number
+  opens: number
+  busy: number
+  captures: number
+}
+
+export interface ProbeResult {
+  kind: string
+  signature: string
+  preview: string
+  busy: boolean
+  opens: number
 }

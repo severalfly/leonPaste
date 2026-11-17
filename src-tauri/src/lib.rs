@@ -2,6 +2,7 @@ mod clip;
 mod clipboard;
 mod dib;
 mod commands;
+mod stats;
 mod store;
 pub mod types;
 
@@ -238,6 +239,7 @@ pub fn run() {
             commands::hide_window,
             commands::get_diagnostics,
             commands::open_data_dir,
+            commands::probe_clipboard,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

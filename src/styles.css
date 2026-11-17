@@ -394,3 +394,18 @@ button { cursor: pointer; color: inherit; }
 }
 .about-loading { font-size: 11.5px; color: var(--dim); }
 .drawer-body { padding-bottom: 16px; }
+
+.diag-counts { font-size: 11px; opacity: 0.85; }
+.probe-box {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  font-size: 11.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  user-select: text;
+}
+.probe-box.bad { border-color: #e06565; color: #e79a9a; }
+.probe-preview { word-break: break-all; opacity: 0.9; max-height: 54px; overflow: auto; }

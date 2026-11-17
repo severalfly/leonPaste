@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { Diagnostics, Entry, Settings } from './types'
+import type { Diagnostics, Entry, ProbeResult, Settings } from './types'
 
 const defaultSettings: Settings = {
   max_items: 500,
@@ -23,6 +23,16 @@ const selected = ref(0)
 const settings = ref<Settings>({ ...defaultSettings })
 const showSettings = ref(false)
 const diag = ref<Diagnostics | null>(null)
+const probe = ref<ProbeResult | null>(null)
+
+async function probeClipboard() {
+  try {
+    probe.value = await invoke<ProbeResult>('probe_clipboard')
+    loadDiagnostics()
+  } catch {
+    probe.value = null
+  }
+}
 
 async function loadDiagnostics() {
   try {
@@ -370,7 +380,10 @@ onUnmounted(() => {
         <div class="about">
           <div class="about-head">
             <span>关于与诊断</span>
-            <button class="mini" @click="loadDiagnostics">刷新</button>
+            <span>
+              <button class="mini" @click="probeClipboard">检测剪贴板</button>
+              <button class="mini" @click="loadDiagnostics">刷新</button>
+            </span>
           </div>
           <div v-if="diag" class="about-grid">
             <div class="about-title">{{ diag.product }} {{ diag.version }}</div>
@@ -383,6 +396,14 @@ onUnmounted(() => {
               · {{ diag.paused ? '已暂停' : '记录中' }}
               · {{ diag.portable ? '便携模式' : '标准模式' }}
               · 热键 {{ diag.hotkey }}
+            </div>
+            <div class="diag-counts">
+              循环 {{ diag.ticks }} · 成功读取 {{ diag.opens }} · 被占用 {{ diag.busy }} · 捕获 {{ diag.captures }}
+            </div>
+            <div v-if="probe" class="probe-box" :class="{ bad: probe.busy }">
+              <b>剪贴板探测：{{ probe.kind }}</b>
+              <div>签名 {{ probe.signature }}</div>
+              <div class="probe-preview">{{ probe.preview }}</div>
             </div>
             <div class="dir-row">
               <span class="dir" :title="diag.data_dir">{{ diag.data_dir }}</span>

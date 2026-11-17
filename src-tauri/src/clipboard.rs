@@ -41,10 +41,12 @@ pub fn start_monitor(app: tauri::AppHandle) {
         std::thread::sleep(Duration::from_millis(180));
         let state = app.state::<AppState>();
         state.last_tick.store(secs(), Ordering::SeqCst);
+        crate::stats::note_tick();
 
         let cap = clip::read();
         if matches!(cap, clip::Capture::Busy) {
             busy_count += 1;
+            crate::stats::note_busy();
             if busy_count % 30 == 1 {
                 log_line(&app, "clipboard busy, retrying");
             }
@@ -136,6 +138,7 @@ pub fn start_monitor(app: tauri::AppHandle) {
         let snapshot = history.clone();
         drop(history);
         let _ = store::save(&app, &snapshot, &settings);
+        crate::stats::note_capture();
         log_line(&app, "captured");
         let _ = app.emit("history-changed", ());
     });

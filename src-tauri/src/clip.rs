@@ -63,6 +63,7 @@ pub fn read() -> Capture {
         if OpenClipboard(std::ptr::null_mut()) == 0 {
             return Capture::Busy;
         }
+        crate::stats::note_open();
 
         if IsClipboardFormatAvailable(CF_HDROP) != 0 {
             let h = GetClipboardData(CF_HDROP);
@@ -79,17 +80,6 @@ pub fn read() -> Capture {
                 if !files.is_empty() {
                     CloseClipboard();
                     return Capture::Files(files);
-                }
-            }
-        }
-
-        if IsClipboardFormatAvailable(CF_DIB) != 0 {
-            let h = GetClipboardData(CF_DIB);
-            if !h.is_null() {
-                let d = lock_bytes(h);
-                if !d.is_empty() {
-                    CloseClipboard();
-                    return Capture::Dib(d);
                 }
             }
         }
@@ -114,6 +104,16 @@ pub fn read() -> Capture {
             }
         }
 
+        if IsClipboardFormatAvailable(CF_DIB) != 0 {
+            let h = GetClipboardData(CF_DIB);
+            if !h.is_null() {
+                let d = lock_bytes(h);
+                if !d.is_empty() {
+                    CloseClipboard();
+                    return Capture::Dib(d);
+                }
+            }
+        }
         CloseClipboard();
         Capture::Empty
     }
