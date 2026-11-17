@@ -1,6 +1,6 @@
 [package]
 name = "leonpaste"
-version = "0.3.3"
+version = "0.3.4"
 description = "A Paste-like clipboard history manager for Windows 10/11"
 authors = ["severalfly"]
 edition = "2021"
@@ -20,5 +20,5 @@ tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_Shell"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_Shell", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_Recovery"] }
 base64 = "0.22"

@@ -222,10 +222,14 @@ pub fn get_diagnostics(app: tauri::AppHandle, state: State<'_, AppState>) -> Dia
         .map(|s| {
             let lines: Vec<String> = s
                 .lines()
-                .filter(|l| !l.contains("alive #"))
+                .filter(|l| {
+                    !l.contains("alive #")
+                        && !l.contains("] hide")
+                        && !l.contains("] toggle")
+                })
                 .map(|l| l.to_string())
                 .collect();
-            lines.iter().rev().take(12).cloned().rev().collect()
+            lines.iter().rev().take(20).cloned().rev().collect()
         })
         .unwrap_or_default();
     let portable = std::env::current_exe()

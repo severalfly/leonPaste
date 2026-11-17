@@ -2,6 +2,24 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.4] - 2026-11-17
+
+### 托盘退出：日志取证结论与补强
+
+用户提供 `leonpaste.log` 后按北京时间对齐：13:44:12、14:12:14 两次 0.3.1 启动，14:49:28 一次 0.3.2+ 启动（含 `heartbeat-started`）。关键事实：
+
+- 全程**没有 `PANIC`、没有 `exit: event loop ended`、没有 `quit: tray menu`、没有 `exit: blocked unexpected ExitRequested`** → 不是 Rust panic、不是托盘菜单退出、也不是被拦下的误退出请求。
+- 14:12:14 那次实例持续捕获约 37 分钟，说明不是启动即崩。
+- 0.3.2 心跳是 60 秒一次，最后一次启动到日志快照只有 21 秒，因此「缺少 `alive` 行」不能单独证明进程已死，但也无法排除被硬终止。
+
+结论：0.3.2 / 0.3.3 的 Rust 层防护全部没被触发，缺口在 native 层与托盘图标本身。本次补强：
+
+- **SEH 未处理异常过滤**：`SetUnhandledExceptionFilter` 捕获 access violation 等 native 异常，把异常码写入日志（如 `SEH_EXCEPTION code=0xC0000005`）；`catch_unwind` 拦不住这类异常，以前日志只会戛然而止。
+- **注册 `RegisterApplicationRestart`**：崩溃后由 Windows 尝试自动拉起，托盘不至于一直消失。
+- **托盘无条件自愈**：心跳从 60 秒缩到 20 秒并带 `tray=` 状态；每 60 秒在**主线程**删除并重建整套托盘与菜单，覆盖 explorer 重启 / 通知区域图标被系统清理（旧版心跳只检测、不刷新，图标丢了要等用户按热键才恢复）。
+- **关键路径留痕**：`setup-start vX.Y.Z pid=...`、热键按下、`show: begin/done`、`hide`、`toggle`、`tray-periodic-rebuild`，能看出异常前最后一步；诊断页日志列表过滤高频行并显示最近 20 行。
+- 新增 windows-sys features：`Win32_System_Diagnostics_Debug` / `Win32_System_Kernel` / `Win32_System_Recovery`。
+
 ## [0.3.3] - 2026-11-17
 
 ### 修复

@@ -86,6 +86,14 @@
 
 现在移除指针捕获，改用 window 级 `pointermove` / `pointerup` / `pointercancel` 监听（拖出卡片照样能横向滚动）；粘贴由 `pointerup` 主触发，要求按下与松开在同一张卡片且位移不超过 6px 死区，`click` 作为 400ms 去重后的兜底；双击按同卡片 250ms 去重，只粘贴一次。`.star` 收藏按钮仍由 `@click.stop` 独立处理，组件卸载会移除 window 级监听。
 
+## 0.3.4 托盘退出：日志取证与自愈
+
+用户提供 `leonpaste.log` 后按北京时间对齐：13:44:12、14:12:14 两次 0.3.1 启动，14:49:28 一次 0.3.2+ 启动（含 `heartbeat-started`）。**全程没有 `PANIC`、没有 `exit: event loop ended`、没有 `quit: tray menu`、没有 `exit: blocked unexpected ExitRequested`** —— Rust 层的所有退出防护都没被触发；中间那次实例持续捕获约 37 分钟，也不是启动即崩。0.3.2 心跳为 60 秒一次，而最后一次启动到日志快照只有 21 秒，所以「缺少 `alive` 行」既不能单独证明进程已死，也不能排除被硬终止。
+
+因此这次补的是**更底层**的能力：SEH 未处理异常过滤（`SetUnhandledExceptionFilter`）把 native 异常码写进日志，例如 `SEH_EXCEPTION code=0xC0000005`；`RegisterApplicationRestart` 让 Windows 在崩溃后尝试自动拉起；心跳缩到 20 秒并带 `tray=` 状态，每 60 秒在**主线程**无条件删除并重建整个托盘（旧版心跳只检测、不刷新，图标被系统清理后要等按热键才恢复）；`setup-start vX.Y.Z pid=...`、热键、`show: begin/done`、`hide`、`toggle`、`tray-periodic-rebuild` 全部留痕，能看到异常前最后一步。
+
+**下次再遇到时，请先确认一件事**：图标消失的瞬间按 `Alt+Shift+V`，面板还能不能弹出来？能弹出 = 进程还在，只是通知区域图标被系统清理（0.3.4 会自动重建）；弹不出 = 进程确实终止（日志里应出现 `SEH_EXCEPTION`，把最后 30 行发来即可看到异常码）。
+
 ## 权限与排查
 
 leonPaste 是 Win32 桌面程序，读取剪贴板**不需要**管理员权限，也不需要 Windows「隐私 → 剪贴板」里的任何开关（那些只管 UWP 应用、剪贴板历史与云同步）。Win11 自带 WebView2；Win10 首次启动会提示安装运行时。

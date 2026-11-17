@@ -12,10 +12,11 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Mutex,
+        Mutex, OnceLock,
     },
     time::Duration,
 };
+use windows_sys::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -34,6 +35,8 @@ pub struct AppState {
 
 /// 只有托盘菜单「退出」会置位；其余任何退出请求一律拦下并记日志。
 pub static USER_QUIT: AtomicBool = AtomicBool::new(false);
+/// 供 SEH 崩溃回调使用的日志路径（崩溃时只能用最简单的文件 IO）。
+static CRASH_LOG: OnceLock<String> = OnceLock::new();
 
 fn cursor_point() -> Option<(i32, i32)> {
     use windows_sys::Win32::Foundation::POINT;
@@ -92,6 +95,7 @@ fn fit_window(app: &tauri::AppHandle) {
 }
 
 pub fn show_main(app: &tauri::AppHandle) {
+    log_line(app, "show: begin");
     ensure_tray(app, true);
     if let Some(w) = app.get_webview_window("main") {
         fit_window(app);
@@ -99,15 +103,18 @@ pub fn show_main(app: &tauri::AppHandle) {
         let _ = w.set_focus();
         let _ = w.emit("window-shown", ());
     }
+    log_line(app, "show: done");
 }
 
 pub fn hide_main(app: &tauri::AppHandle) {
+    log_line(app, "hide");
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.hide();
     }
 }
 
 pub fn toggle_main(app: &tauri::AppHandle) {
+    log_line(app, "toggle");
     if let Some(w) = app.get_webview_window("main") {
         if w.is_visible().unwrap_or(false) {
             let _ = w.hide();
@@ -156,6 +163,35 @@ fn install_panic_hook(path: PathBuf) {
         append_log(&path, &format!("[{}] PANIC: {} @ {}", types::now(), msg, loc));
         default_hook(info);
     }));
+}
+
+/// 捕获 native 层的未处理异常（access violation 等），写一行异常码再交给系统。
+/// Rust 的 catch_unwind 拦不住这类异常，日志以前会「戛然而止」而无线索。
+unsafe extern "system" fn crash_filter(info: *const EXCEPTION_POINTERS) -> i32 {
+    let code = if info.is_null() {
+        0u32
+    } else {
+        let rec = (*info).ExceptionRecord;
+        if rec.is_null() { 0u32 } else { (*rec).ExceptionCode as u32 }
+    };
+    if let Some(p) = CRASH_LOG.get() {
+        append_log(
+            std::path::Path::new(p),
+            &format!("[{}] SEH_EXCEPTION code=0x{:08X}", types::now(), code),
+        );
+    }
+    1 // EXCEPTION_EXECUTE_HANDLER
+}
+
+fn install_crash_guard(path: PathBuf) {
+    let _ = CRASH_LOG.set(path.to_string_lossy().to_string());
+    unsafe {
+        use windows_sys::Win32::System::Diagnostics::Debug::SetUnhandledExceptionFilter;
+        use windows_sys::Win32::System::Recovery::RegisterApplicationRestart;
+        SetUnhandledExceptionFilter(Some(crash_filter));
+        // 崩溃后由 Windows 尝试自动拉起，托盘不至于一直消失
+        let _ = RegisterApplicationRestart(std::ptr::null(), 0);
+    }
 }
 
 /// 托盘是唯一的常驻入口，抽成函数便于丢失后整体重建。
@@ -235,16 +271,8 @@ fn build_tray(app: &tauri::AppHandle, hotkey: &str) -> Result<(), String> {
 
 /// 托盘对象丢失就整体重建；refresh=true 时顺手刷新图标，
 /// 应对资源管理器重启后「进程还活着，但通知区域图标被清掉」的情况。
-fn ensure_tray(app: &tauri::AppHandle, refresh: bool) {
-    if let Some(tray) = app.tray_by_id("main") {
-        if refresh {
-            if let Some(icon) = app.default_window_icon() {
-                let _ = tray.set_icon(Some(icon.clone()));
-            }
-        }
-        return;
-    }
-    log_line(app, "tray-missing -> rebuild");
+fn rebuild_tray(app: &tauri::AppHandle) {
+    let _ = app.remove_tray_by_id("main");
     let hotkey = app
         .state::<AppState>()
         .settings
@@ -258,12 +286,25 @@ fn ensure_tray(app: &tauri::AppHandle, refresh: bool) {
     }
 }
 
+fn ensure_tray(app: &tauri::AppHandle, refresh: bool) {
+    if let Some(tray) = app.tray_by_id("main") {
+        if refresh {
+            if let Some(icon) = app.default_window_icon() {
+                let _ = tray.set_icon(Some(icon.clone()));
+            }
+        }
+        return;
+    }
+    log_line(app, "tray-missing -> rebuild");
+    rebuild_tray(app);
+}
+
 /// 每分钟一行心跳。日志尾部可直接区分：进程崩溃 / 被要求退出 / 进程仍在运行。
 fn start_heartbeat(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let mut n: u64 = 0;
         loop {
-            std::thread::sleep(Duration::from_secs(60));
+            std::thread::sleep(Duration::from_secs(20));
             if USER_QUIT.load(Ordering::SeqCst) {
                 break;
             }
@@ -274,8 +315,17 @@ fn start_heartbeat(app: tauri::AppHandle) {
                 let n = s.history.lock().unwrap_or_else(|e| e.into_inner()).len();
                 (t, n)
             };
-            log_line(&app, &format!("alive #{} tick={} entries={}", n, tick, entries));
-            ensure_tray(&app, false);
+            let tray_alive = app.tray_by_id("main").is_some();
+            log_line(&app, &format!("alive #{} tick={} entries={} tray={}", n, tick, entries, tray_alive));
+            // 每 60 秒在主线程无条件重建托盘：通知区域图标被 explorer 重启或系统
+            // 清理时，仅靠 set_icon 刷新不一定能恢复，直接删除再添加最可靠。
+            if n % 3 == 0 {
+                let h = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    log_line(&h, "tray-periodic-rebuild: begin");
+                    rebuild_tray(&h);
+                });
+            }
         }
     });
 }
@@ -378,6 +428,7 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
+                        log_line(app, "hotkey: pressed");
                         toggle_main(app);
                     }
                 })
@@ -385,9 +436,11 @@ pub fn run() {
         )
         .setup(|app| {
             let handle = app.handle().clone();
-            install_panic_hook(store::data_dir(&handle).join("leonpaste.log"));
+            let log_path = store::data_dir(&handle).join("leonpaste.log");
+            install_panic_hook(log_path.clone());
+            install_crash_guard(log_path);
             let (history, settings) = store::load(&handle);
-            log_line(&handle, "setup-start");
+            log_line(&handle, &format!("setup-start v{} pid={}", env!("CARGO_PKG_VERSION"), std::process::id()));
             let hotkey = settings.hotkey.clone();
             let autostart_on = settings.autostart;
             app.manage(AppState {
