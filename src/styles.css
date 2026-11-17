@@ -78,12 +78,12 @@ button { cursor: pointer; color: inherit; }
 
 .dock {
   position: relative;
-  height: calc(100vh - 28px);
-  margin: 14px 16px;
+  height: calc(100vh - 20px);
+  margin: 10px 12px;
   display: flex;
   flex-direction: column;
-  padding: 16px 18px 12px;
-  border-radius: 24px;
+  padding: 18px 20px 14px;
+  border-radius: 22px;
   border: 1px solid var(--border);
   background: var(--dock-bg);
   backdrop-filter: blur(40px) saturate(170%);
@@ -94,15 +94,15 @@ button { cursor: pointer; color: inherit; }
 }
 .dock.dismissing { animation: dockOut 0.2s cubic-bezier(0.4, 0, 1, 1) forwards; }
 
-.top { flex: 0 0 54px; display: flex; align-items: center; gap: 16px; }
+.top { flex: 0 0 60px; display: flex; align-items: center; gap: 18px; }
 .search-wrap {
   flex: 1;
-  height: 46px;
+  height: 50px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 16px;
-  border-radius: 14px;
+  gap: 14px;
+  padding: 0 18px;
+  border-radius: 15px;
   background: var(--surface);
   border: 1px solid var(--border);
   transition: border-color 0.18s, background 0.18s;
@@ -111,7 +111,7 @@ button { cursor: pointer; color: inherit; }
 .search-icon { color: var(--dim); font-size: 22px; line-height: 1; }
 .search {
   flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
-  color: var(--text); font-size: 16px; letter-spacing: 0.1px; user-select: text;
+  color: var(--text); font-size: 17px; letter-spacing: 0.1px; user-select: text;
 }
 .search::placeholder { color: var(--dim); opacity: 0.8; }
 .count {
@@ -120,7 +120,7 @@ button { cursor: pointer; color: inherit; }
 }
 .top-actions { display: flex; gap: 8px; }
 .icon-btn {
-  width: 40px; height: 40px; border-radius: 12px;
+  width: 42px; height: 42px; border-radius: 13px;
   border: 1px solid var(--border); background: var(--surface);
   color: var(--dim); font-size: 17px; line-height: 1;
   transition: color 0.16s, background 0.16s, border-color 0.16s;
@@ -138,28 +138,28 @@ button { cursor: pointer; color: inherit; }
 
 .track-wrap { flex: 1; display: flex; align-items: stretch; gap: 10px; min-height: 0; padding-top: 14px; }
 .nav {
-  flex: 0 0 32px; border-radius: 11px; border: 1px solid transparent;
+  flex: 0 0 36px; border-radius: 11px; border: 1px solid transparent;
   background: transparent; color: var(--dim); font-size: 24px; line-height: 1;
   transition: background 0.16s, color 0.16s, border-color 0.16s;
 }
 .nav:hover { background: var(--surface); color: var(--text); border-color: var(--border); }
 
 .track {
-  flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 16px;
-  overflow-x: auto; overflow-y: hidden; padding: 4px 4px 12px;
-  scroll-snap-type: x proximity; scrollbar-width: none; cursor: grab;
+  flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 18px;
+  overflow-x: auto; overflow-y: hidden; padding: 4px 6px 12px;
+  scroll-snap-type: none; scrollbar-width: none; cursor: grab;
+  overscroll-behavior-x: contain;
 }
 .track::-webkit-scrollbar { display: none; }
 .track:active { cursor: grabbing; }
 
 .card {
-  flex: 0 0 300px;
+  flex: 0 0 clamp(320px, 25vw, 420px);
   display: flex; flex-direction: column; min-height: 0;
-  padding: 13px 14px 11px;
-  border-radius: 18px;
+  padding: 16px 18px 13px;
+  border-radius: 20px;
   border: 1px solid var(--border);
   background: var(--card);
-  scroll-snap-align: center;
   animation: cardIn 0.34s cubic-bezier(0.18, 1, 0.32, 1) both;
   animation-delay: calc(min(var(--i, 0), 9) * 32ms);
   transition: transform 0.2s cubic-bezier(0.18, 1, 0.32, 1), box-shadow 0.2s, background 0.2s, border-color 0.2s;
@@ -167,9 +167,9 @@ button { cursor: pointer; color: inherit; }
 .card:hover { transform: translateY(-6px) scale(1.012); background: var(--card-hover); box-shadow: 0 20px 44px rgba(0, 0, 0, 0.34); }
 .card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 20px 46px rgba(0, 0, 0, 0.36); transform: scale(1.02); }
 
-.card-head { flex: 0 0 28px; display: flex; align-items: center; gap: 9px; }
+.card-head { flex: 0 0 30px; display: flex; align-items: center; gap: 9px; }
 .badge {
-  flex: 0 0 26px; height: 26px; display: grid; place-items: center;
+  flex: 0 0 28px; height: 28px; display: grid; place-items: center;
   border-radius: 8px; background: var(--surface-strong); color: var(--dim);
   font-size: 11px; font-weight: 600; overflow: hidden;
 }
@@ -179,33 +179,33 @@ button { cursor: pointer; color: inherit; }
 .b-path { color: #cda4f0; background: rgba(160, 100, 220, 0.16); }
 .b-image { color: #8adfd1; background: rgba(50, 180, 165, 0.18); }
 .b-files { color: #e7a8c0; background: rgba(210, 100, 150, 0.16); }
-.kind-name { font-size: 11.5px; color: var(--dim); }
+.kind-name { font-size: 12.5px; color: var(--dim); }
 .time { flex: 1; text-align: right; font-size: 11px; color: var(--dim); opacity: 0.8; font-variant-numeric: tabular-nums; }
 .star { flex: 0 0 22px; border: 0; background: transparent; color: var(--dim); font-size: 16px; padding: 0; }
 .star:hover { color: var(--text); }
 .star.on { color: #f0c654; }
 
-.card-body { flex: 1; min-height: 0; display: grid; place-items: center; margin: 11px 0 9px; overflow: hidden; }
+.card-body { flex: 1; min-height: 0; display: grid; place-items: center; margin: 13px 0 11px; overflow: hidden; }
 .thumb {
   max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 11px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.32); pointer-events: none;
 }
 .color-block { width: 100%; height: 100%; min-height: 92px; border-radius: 11px; border: 1px solid var(--border); }
 .text-preview {
-  width: 100%; max-height: 100%; font-size: 13.5px; line-height: 1.65;
+  width: 100%; max-height: 100%; font-size: 14.5px; line-height: 1.7;
   color: var(--text); opacity: 0.9; word-break: break-word; overflow: hidden;
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 10;
 }
-.text-preview.mono { font-family: "Cascadia Code", "Consolas", monospace; font-size: 12px; opacity: 0.84; }
+.text-preview.mono { font-family: "Cascadia Code", "Consolas", monospace; font-size: 12.8px; opacity: 0.84; }
 
 .card-foot {
-  flex: 0 0 22px; display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  padding-top: 8px; border-top: 1px solid var(--line); font-size: 11px; color: var(--dim);
+  flex: 0 0 24px; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding-top: 8px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--dim);
 }
-.src { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .empty { flex: 1; display: grid; place-items: center; align-content: center; gap: 6px; color: var(--dim); text-align: center; }
-.empty-mark { font-size: 40px; opacity: 0.4; }
+.empty-mark { font-size: 46px; opacity: 0.4; }
 .empty p { margin: 8px 0 0; color: var(--text); font-size: 15px; }
 .empty-actions { display: flex; gap: 9px; margin-top: 14px; }
 .empty-actions button {

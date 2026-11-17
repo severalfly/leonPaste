@@ -30,19 +30,65 @@ pub struct AppState {
     pub last_sig: Mutex<String>,
 }
 
-pub fn show_main(app: &tauri::AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        if let Ok(Some(monitor)) = w.current_monitor() {
-            let screen = monitor.size();
-            if let Ok(win) = w.outer_size() {
-                let x = (screen.width.saturating_sub(win.width)) / 2;
-                let y = screen.height.saturating_sub(win.height.saturating_add(96));
-                let _ = w.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                    x: x as i32,
-                    y: y as i32,
-                }));
+fn cursor_point() -> Option<(i32, i32)> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut p = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut p) } != 0 {
+        Some((p.x, p.y))
+    } else {
+        None
+    }
+}
+
+// 每次唤起都按鼠标所在显示器重新计算窗口：先定逻辑(CSS)尺寸，再乘该屏
+// scale_factor 换算成物理像素。100% / 125% / 150% 缩放、外接屏与笔记本屏
+// 都能得到一致的布局比例，且窗口横向铺满、不会超出屏幕。
+fn fit_window(app: &tauri::AppHandle) {
+    let Some(w) = app.get_webview_window("main") else { return };
+    let monitors = app.available_monitors().unwrap_or_default();
+    let mut picked: Option<(f64, u32, u32, i32, i32)> = None;
+    if let Some((cx, cy)) = cursor_point() {
+        for m in &monitors {
+            let p = m.position();
+            let s = m.size();
+            if cx >= p.x && cx < p.x + s.width as i32 && cy >= p.y && cy < p.y + s.height as i32 {
+                picked = Some((m.scale_factor(), s.width, s.height, p.x, p.y));
+                break;
             }
         }
+    }
+    if picked.is_none() {
+        if let Some(m) = w.current_monitor().ok().flatten().or_else(|| app.primary_monitor().ok().flatten()) {
+            picked = Some((m.scale_factor(), m.size().width, m.size().height, m.position().x, m.position().y));
+        }
+    }
+    if picked.is_none() {
+        if let Some(m) = monitors.first() {
+            picked = Some((m.scale_factor(), m.size().width, m.size().height, m.position().x, m.position().y));
+        }
+    }
+    let Some((raw_scale, sw, sh, px, py)) = picked else { return };
+    let scale = if raw_scale > 0.5 { raw_scale } else { 1.0 };
+
+    let logical_w = sw as f64 / scale;
+    let logical_h = sh as f64 / scale;
+    let width = (logical_w - 28.0).max(680.0);
+    let height = (logical_h * 0.58).clamp(340.0, 520.0);
+
+    let phys_w = (width * scale).round() as u32;
+    let phys_h = (height * scale).round() as u32;
+    let _ = w.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: phys_w, height: phys_h }));
+
+    let x = px + (((sw as i64 - phys_w as i64) / 2).max(0)) as i32;
+    let gap = (72.0 * scale).round() as i64;
+    let y = py + ((sh as i64 - phys_h as i64 - gap).max(0)) as i32;
+    let _ = w.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+}
+
+pub fn show_main(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        fit_window(app);
         let _ = w.show();
         let _ = w.set_focus();
         let _ = w.emit("window-shown", ());

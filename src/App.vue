@@ -40,6 +40,8 @@ let dragging = false
 let moved = 0
 let startX = 0
 let startScroll = 0
+let wheelAcc = 0
+let wheelRaf = 0
 
 const filters = [
   { id: 'all', label: '全部' },
@@ -216,10 +218,27 @@ function cardMeta(item: Entry) {
 function onWheel(e: WheelEvent) {
   const el = trackEl.value
   if (!el) return
-  el.scrollLeft += (Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX) * 1.2
+  let d = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX
+  if (e.deltaMode === 1) d *= 18
+  else if (e.deltaMode === 2) d *= el.clientWidth
+  if (d === 0) return
+  // 触控板 / 高 DPI 下的小增量也要能推动列表
+  if (Math.abs(d) < 120) d = Math.sign(d) * 120
+  wheelAcc += d * 1.15
+  if (wheelRaf) return
+  wheelRaf = requestAnimationFrame(() => {
+    wheelRaf = 0
+    const step = wheelAcc
+    wheelAcc = 0
+    el.scrollLeft += step
+  })
 }
 function scrollBy(dir: number) {
-  trackEl.value?.scrollBy({ left: dir * 620, behavior: 'smooth' })
+  const el = trackEl.value
+  if (!el) return
+  const card = el.querySelector<HTMLElement>('.card')
+  const step = card ? card.offsetWidth + 18 : 380
+  el.scrollBy({ left: dir * step * 2, behavior: 'smooth' })
 }
 function onPointerDown(e: PointerEvent) {
   if ((e.target as HTMLElement).closest('.star')) return
@@ -328,6 +347,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (syncTimer) window.clearInterval(syncTimer)
+  if (wheelRaf) cancelAnimationFrame(wheelRaf)
   unlisteners.forEach((f) => f())
   window.removeEventListener('keydown', onCaptureKey, true)
   window.removeEventListener('keydown', onKey)
