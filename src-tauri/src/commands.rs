@@ -1,13 +1,30 @@
 use crate::{
-    store,
+    dib, store,
     types::{Entry, Settings},
     AppState,
 };
+use base64::Engine;
 use std::sync::atomic::Ordering;
 use tauri::{Emitter, State};
 
+fn fill_thumbs(app: &tauri::AppHandle, items: &mut [Entry]) {
+    let dir = store::data_dir(app).join("images");
+    for e in items.iter_mut() {
+        if let Some(name) = &e.image {
+            let stem = name.trim_end_matches(".dib");
+            if let Ok(b) = std::fs::read(dir.join(format!("{}.bmp", stem))) {
+                e.thumb = Some(format!(
+                    "data:image/bmp;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(&b)
+                ));
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub fn list_history(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     query: String,
     filter: String,
@@ -21,7 +38,10 @@ pub fn list_history(
             if favorites_only && !e.favorite {
                 return false;
             }
-            if !q.is_empty() && !e.text.to_lowercase().contains(&q) {
+            if !q.is_empty()
+                && !e.text.to_lowercase().contains(&q)
+                && !e.preview.to_lowercase().contains(&q)
+            {
                 return false;
             }
             if filter == "all" {
@@ -32,6 +52,7 @@ pub fn list_history(
         })
         .cloned()
         .collect();
+    drop(history);
     out.sort_by(|a, b| {
         b.favorite
             .cmp(&a.favorite)
@@ -40,6 +61,7 @@ pub fn list_history(
     if out.len() > 200 {
         out.truncate(200);
     }
+    fill_thumbs(&app, &mut out);
     out
 }
 
@@ -49,22 +71,30 @@ pub fn paste_entry(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
-    let text = {
+    let entry = {
         let history = state.history.lock().unwrap();
         history
             .iter()
             .find(|e| e.id == id)
-            .map(|e| e.text.clone())
+            .cloned()
             .ok_or_else(|| "找不到该条目".to_string())?
     };
     state.suppress.store(true, Ordering::SeqCst);
-    clipboard_win::set_clipboard_string(&text)
-        .map_err(|_| "写入剪贴板失败".to_string())?;
+    if let Some(name) = &entry.image {
+        let p = store::data_dir(&app).join("images").join(name);
+        let d = std::fs::read(p).map_err(|e| e.to_string())?;
+        if !dib::write_clipboard_dib(&d) {
+            return Err("写入图片剪贴板失败".to_string());
+        }
+    } else {
+        clipboard_win::set_clipboard_string(&entry.text)
+            .map_err(|_| "写入剪贴板失败".to_string())?;
+    }
     let auto_paste = { state.settings.lock().unwrap().auto_paste };
     crate::hide_main(&app);
     if auto_paste {
         std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_millis(140));
+            std::thread::sleep(std::time::Duration::from_millis(160));
             crate::auto_paste();
         });
     }
@@ -86,22 +116,26 @@ pub fn toggle_favorite(app: tauri::AppHandle, state: State<'_, AppState>, id: St
 
 #[tauri::command]
 pub fn delete_entry(app: tauri::AppHandle, state: State<'_, AppState>, id: String) {
-    let (snapshot, settings) = {
+    let (removed, snapshot, settings) = {
         let mut history = state.history.lock().unwrap();
+        let removed: Vec<Entry> = history.iter().filter(|e| e.id == id).cloned().collect();
         history.retain(|e| e.id != id);
-        (history.clone(), state.settings.lock().unwrap().clone())
+        (removed, history.clone(), state.settings.lock().unwrap().clone())
     };
+    store::remove_images(&app, &removed);
     let _ = store::save(&app, &snapshot, &settings);
     let _ = app.emit("history-changed", ());
 }
 
 #[tauri::command]
 pub fn clear_history(app: tauri::AppHandle, state: State<'_, AppState>) {
-    let (snapshot, settings) = {
+    let (removed, snapshot, settings) = {
         let mut history = state.history.lock().unwrap();
+        let removed: Vec<Entry> = history.iter().filter(|e| !e.favorite).cloned().collect();
         history.retain(|e| e.favorite);
-        (history.clone(), state.settings.lock().unwrap().clone())
+        (removed, history.clone(), state.settings.lock().unwrap().clone())
     };
+    store::remove_images(&app, &removed);
     let _ = store::save(&app, &snapshot, &settings);
     let _ = app.emit("history-changed", ());
 }

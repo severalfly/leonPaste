@@ -1,4 +1,5 @@
 mod clipboard;
+mod dib;
 mod commands;
 mod store;
 pub mod types;
@@ -24,9 +25,19 @@ pub struct AppState {
 
 pub fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        if let Ok(Some(monitor)) = w.current_monitor() {
+            let screen = monitor.size();
+            if let Ok(win) = w.outer_size() {
+                let x = (screen.width.saturating_sub(win.width)) / 2;
+                let y = screen.height.saturating_sub(win.height.saturating_add(96));
+                let _ = w.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                    x: x as i32,
+                    y: y as i32,
+                }));
+            }
+        }
         let _ = w.show();
         let _ = w.set_focus();
-        let _ = w.center();
         let _ = w.emit("window-shown", ());
     }
 }
@@ -42,9 +53,7 @@ pub fn toggle_main(app: &tauri::AppHandle) {
         if w.is_visible().unwrap_or(false) {
             let _ = w.hide();
         } else {
-            let _ = w.show();
-            let _ = w.set_focus();
-            let _ = w.emit("window-shown", ());
+            show_main(app);
         }
     }
 }

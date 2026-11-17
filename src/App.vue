@@ -23,17 +23,23 @@ const selected = ref(0)
 const settings = ref<Settings>({ ...defaultSettings })
 const showSettings = ref(false)
 const searchEl = ref<HTMLInputElement | null>(null)
+const trackEl = ref<HTMLElement | null>(null)
 const unlisteners: Array<() => void> = []
+let shownAt = 0
+let dragging = false
+let moved = 0
+let startX = 0
+let startScroll = 0
 
 const filters = [
   { id: 'all', label: '全部' },
   { id: 'text', label: '文本' },
+  { id: 'image', label: '图片' },
   { id: 'link', label: '链接' },
   { id: 'code', label: '代码' },
   { id: 'color', label: '颜色' },
   { id: 'path', label: '路径' },
 ]
-
 const hotkeys = ['Ctrl+Shift+V', 'Ctrl+Alt+V', 'Alt+V', 'Ctrl+`']
 const total = computed(() => items.value.length)
 
@@ -72,9 +78,17 @@ function focusSearch() {
   })
 }
 
-async function pasteSelected() {
-  const item = items.value[selected.value]
+function ensureVisible(i: number) {
+  nextTick(() => {
+    const el = document.querySelector<HTMLElement>(`.card[data-i="${i}"]`)
+    el?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
+  })
+}
+
+async function pasteAt(i: number) {
+  const item = items.value[i]
   if (!item) return
+  selected.value = i
   await invoke('paste_entry', { id: item.id })
 }
 
@@ -106,11 +120,49 @@ function fmtTime(ts: number) {
 }
 
 function kindLabel(k: string) {
-  return { text: '文本', link: '链接', code: '代码', color: '颜色', path: '路径' }[k] ?? '文本'
+  return (
+    { text: '文本', link: '链接', code: '代码', color: '颜色', path: '路径', image: '图片', files: '文件' }[k] ??
+    '文本'
+  )
+}
+function kindGlyph(k: string) {
+  return { text: 'T', link: '↗', code: '</>', color: '◧', path: '/', image: '▣', files: '≡' }[k] ?? 'T'
+}
+function cardMeta(item: Entry) {
+  if (item.kind === 'image') return `${item.image_width}×${item.image_height}`
+  if (item.kind === 'code') return `${item.text.split('\n').length} 行`
+  return `${item.text.length} 字符`
 }
 
-function kindGlyph(k: string) {
-  return { text: 'T', link: '↗', code: '</>', color: '◧', path: '/' }[k] ?? 'T'
+function onWheel(e: WheelEvent) {
+  const el = trackEl.value
+  if (!el) return
+  const d = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX
+  el.scrollLeft += d * 1.15
+}
+function scrollBy(dir: number) {
+  trackEl.value?.scrollBy({ left: dir * 470, behavior: 'smooth' })
+}
+function onPointerDown(e: PointerEvent) {
+  if ((e.target as HTMLElement).closest('.star')) return
+  dragging = true
+  moved = 0
+  startX = e.clientX
+  startScroll = trackEl.value?.scrollLeft ?? 0
+  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+}
+function onPointerMove(e: PointerEvent) {
+  if (!dragging || !trackEl.value) return
+  const dx = e.clientX - startX
+  moved = Math.abs(dx)
+  trackEl.value.scrollLeft = startScroll - dx
+}
+function onPointerUp() {
+  dragging = false
+}
+function onCardClick(i: number) {
+  if (moved > 6) return
+  pasteAt(i)
 }
 
 function onKey(e: KeyboardEvent) {
@@ -125,16 +177,17 @@ function onKey(e: KeyboardEvent) {
     return
   }
   if (showSettings.value) return
-
-  if (e.key === 'ArrowDown') {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
     e.preventDefault()
     selected.value = Math.min(items.value.length - 1, selected.value + 1)
-  } else if (e.key === 'ArrowUp') {
+    ensureVisible(selected.value)
+  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
     e.preventDefault()
     selected.value = Math.max(0, selected.value - 1)
+    ensureVisible(selected.value)
   } else if (e.key === 'Enter') {
     e.preventDefault()
-    pasteSelected()
+    pasteAt(selected.value)
   } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
     e.preventDefault()
     const item = items.value[selected.value]
@@ -144,6 +197,13 @@ function onKey(e: KeyboardEvent) {
     const item = items.value[selected.value]
     if (item) removeItem(item)
   }
+}
+
+function onBlur() {
+  if (Date.now() - shownAt < 400) return
+  window.setTimeout(() => {
+    if (!document.hasFocus()) invoke('hide_window')
+  }, 120)
 }
 
 watch([query, filter, favoritesOnly], () => {
@@ -159,104 +219,113 @@ onMounted(async () => {
     await listen('history-changed', () => refresh()),
     await listen('settings-changed', () => loadSettings()),
     await listen('window-shown', () => {
+      shownAt = Date.now()
       query.value = ''
+      filter.value = 'all'
       refresh()
       focusSearch()
+      nextTick(() => {
+        if (trackEl.value) trackEl.value.scrollLeft = 0
+      })
     }),
   )
   window.addEventListener('keydown', onKey)
+  window.addEventListener('blur', onBlur)
   window.addEventListener('focus', refresh)
 })
 
 onUnmounted(() => {
   unlisteners.forEach((f) => f())
   window.removeEventListener('keydown', onKey)
+  window.removeEventListener('blur', onBlur)
   window.removeEventListener('focus', refresh)
 })
 </script>
 
 <template>
-  <div class="app" data-tauri-drag-region>
-    <header class="topbar" data-tauri-drag-region>
-      <div class="brand" data-tauri-drag-region>
-        <span class="logo">P</span>
-        <span class="name" data-tauri-drag-region>leonPaste</span>
+  <div class="dock">
+    <header class="top" data-tauri-drag-region>
+      <div class="search-wrap">
+        <span class="search-icon">⌕</span>
+        <input
+          ref="searchEl"
+          v-model="query"
+          class="search"
+          type="text"
+          placeholder="搜索剪贴板历史…"
+          spellcheck="false"
+        />
+        <span class="count">{{ total }} 项</span>
       </div>
-      <div class="top-actions">
+      <nav class="filters">
         <button
-          class="chip"
-          :class="{ on: favoritesOnly }"
-          title="只看收藏"
-          @click="favoritesOnly = !favoritesOnly"
-        >★ 收藏</button>
-        <button class="chip" title="设置" @click="showSettings = !showSettings">⚙</button>
-      </div>
+          v-for="f in filters"
+          :key="f.id"
+          class="filter"
+          :class="{ active: filter === f.id }"
+          @click="filter = f.id"
+        >{{ f.label }}</button>
+        <button class="filter star-filter" :class="{ active: favoritesOnly }" title="只看收藏" @click="favoritesOnly = !favoritesOnly">★</button>
+      </nav>
+      <button class="gear" title="设置" @click="showSettings = !showSettings">⚙</button>
     </header>
 
-    <div class="search-row">
-      <span class="search-icon">⌕</span>
-      <input
-        ref="searchEl"
-        v-model="query"
-        class="search"
-        type="text"
-        placeholder="搜索剪贴板历史…"
-        spellcheck="false"
-      />
-      <span class="count">{{ total }} 条</span>
-    </div>
-
-    <nav class="filters">
-      <button
-        v-for="f in filters"
-        :key="f.id"
-        class="filter"
-        :class="{ active: filter === f.id }"
-        @click="filter = f.id"
-      >{{ f.label }}</button>
-    </nav>
-
-    <main class="list" :class="{ empty: items.length === 0 }">
-      <div v-if="items.length === 0" class="empty-state">
-        <div class="empty-icon">▤</div>
-        <p>还没有剪贴板记录</p>
-        <span>复制任意文本后会自动出现在这里</span>
-      </div>
+    <div class="track-wrap">
+      <button class="nav prev" title="向左" @click="scrollBy(-1)">‹</button>
       <div
-        v-for="(item, i) in items"
-        :key="item.id"
-        class="row"
-        :class="{ active: i === selected }"
-        @mouseenter="selected = i"
-        @click="pasteSelected"
+        ref="trackEl"
+        class="track"
+        @wheel.prevent="onWheel"
+        @pointerdown="onPointerDown"
+        @pointermove="onPointerMove"
+        @pointerup="onPointerUp"
+        @pointercancel="onPointerUp"
       >
-        <span class="kind" :class="`k-${item.kind}`">{{ kindGlyph(item.kind) }}</span>
-        <div class="row-main">
-          <div class="row-text">{{ item.preview || '(空白)' }}</div>
-          <div class="row-meta">
-            <span class="tag">{{ kindLabel(item.kind) }}</span>
-            <span class="dot">·</span>
+        <div
+          v-for="(item, i) in items"
+          :key="item.id"
+          class="card"
+          :class="{ sel: i === selected }"
+          :data-i="i"
+          @click="onCardClick(i)"
+        >
+          <div class="card-head">
+            <span class="badge" :class="`b-${item.kind}`">{{ kindGlyph(item.kind) }}</span>
+            <span class="kind-name">{{ kindLabel(item.kind) }}</span>
+            <span class="time">{{ fmtTime(item.created_at) }}</span>
+            <button
+              class="star"
+              :class="{ on: item.favorite }"
+              title="收藏 (Ctrl+D)"
+              @click.stop="toggleFavorite(item)"
+            >{{ item.favorite ? '★' : '☆' }}</button>
+          </div>
+          <div class="card-body">
+            <img v-if="item.thumb" :src="item.thumb" class="thumb" alt="图片预览" draggable="false" />
+            <div v-else-if="item.kind === 'color'" class="color-block" :style="{ background: item.text }"></div>
+            <div v-else class="text-preview" :class="{ mono: item.kind === 'code' || item.kind === 'path' }">{{ item.preview || '(空白)' }}</div>
+          </div>
+          <div class="card-foot">
             <span class="src">{{ item.source }}</span>
-            <span class="dot">·</span>
-            <span>{{ fmtTime(item.created_at) }}</span>
+            <span>{{ cardMeta(item) }}</span>
           </div>
         </div>
-        <button
-          class="star"
-          :class="{ on: item.favorite }"
-          title="收藏 / 取消收藏 (Ctrl+D)"
-          @click.stop="toggleFavorite(item)"
-        >{{ item.favorite ? '★' : '☆' }}</button>
+        <div v-if="items.length === 0" class="empty">
+          <div class="empty-mark">▤</div>
+          <p>还没有剪贴板记录</p>
+          <span>复制文本或截图后，会自动出现在这里</span>
+        </div>
       </div>
-    </main>
+      <button class="nav next" title="向右" @click="scrollBy(1)">›</button>
+    </div>
 
-    <footer class="statusbar">
+    <footer class="hint-bar">
       <span v-if="settings.paused" class="paused">● 已暂停记录</span>
       <span v-else class="live">● 正在记录</span>
       <span class="sep">|</span>
       <span>{{ settings.hotkey }} 唤起</span>
       <span class="grow" />
-      <span class="hint">↑↓ 选择 · Enter 复制 · Ctrl+D 收藏 · Esc 关闭</span>
+      <span>滚轮 / 拖拽 / ←→ 浏览 · 点击或 Enter 复制 · Esc / 点击别处 关闭</span>
     </footer>
 
     <div v-if="showSettings" class="drawer">
@@ -265,43 +334,21 @@ onUnmounted(() => {
         <button class="close" @click="showSettings = false; focusSearch()">×</button>
       </div>
       <div class="drawer-body">
-        <label class="field">
-          <span>全局热键</span>
-          <select v-model="settings.hotkey">
-            <option v-for="k in hotkeys" :key="k" :value="k">{{ k }}</option>
-          </select>
+        <label class="field"><span>全局热键</span>
+          <select v-model="settings.hotkey"><option v-for="k in hotkeys" :key="k" :value="k">{{ k }}</option></select>
         </label>
-        <label class="field">
-          <span>主题</span>
+        <label class="field"><span>主题</span>
           <select v-model="settings.theme">
-            <option value="dark">深色</option>
-            <option value="light">浅色</option>
-            <option value="auto">跟随系统</option>
+            <option value="dark">深色</option><option value="light">浅色</option><option value="auto">跟随系统</option>
           </select>
         </label>
-        <label class="field">
-          <span>最多保留条数</span>
-          <input v-model.number="settings.max_items" type="number" min="10" max="5000" />
-        </label>
-        <label class="field">
-          <span>保留天数（0 = 永久）</span>
-          <input v-model.number="settings.retention_days" type="number" min="0" max="3650" />
-        </label>
-        <label class="field checkbox">
-          <input v-model="settings.auto_paste" type="checkbox" />
-          <span>选中后自动粘贴（模拟 Ctrl+V）</span>
-        </label>
-        <label class="field checkbox">
-          <input v-model="settings.autostart" type="checkbox" />
-          <span>开机自动启动</span>
-        </label>
-        <label class="field checkbox">
-          <input v-model="settings.paused" type="checkbox" />
-          <span>暂停记录</span>
-        </label>
-        <label class="field column">
-          <span>忽略关键词（每行一个，命中则不记录）</span>
-          <textarea v-model="settings.ignore_regex" rows="3" placeholder="密码 / 令牌 / 密钥"></textarea>
+        <label class="field"><span>最多保留条数</span><input v-model.number="settings.max_items" type="number" min="10" max="5000" /></label>
+        <label class="field"><span>保留天数（0 = 永久）</span><input v-model.number="settings.retention_days" type="number" min="0" max="3650" /></label>
+        <label class="field checkbox"><input v-model="settings.auto_paste" type="checkbox" /><span>选中后自动粘贴（模拟 Ctrl+V）</span></label>
+        <label class="field checkbox"><input v-model="settings.autostart" type="checkbox" /><span>开机自动启动</span></label>
+        <label class="field checkbox"><input v-model="settings.paused" type="checkbox" /><span>暂停记录</span></label>
+        <label class="field column"><span>忽略关键词（每行一个，命中则不记录）</span>
+          <textarea v-model="settings.ignore_regex" rows="2" placeholder="密码 / 令牌 / 密钥"></textarea>
         </label>
       </div>
       <div class="drawer-foot">

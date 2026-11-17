@@ -1,4 +1,4 @@
-export type EntryKind = 'text' | 'link' | 'code' | 'color' | 'path'
+export type EntryKind = 'text' | 'link' | 'code' | 'color' | 'path' | 'image' | 'files'
 
 export interface Entry {
   id: string
@@ -8,6 +8,10 @@ export interface Entry {
   favorite: boolean
   created_at: number
   source: string
+  image: string | null
+  thumb: string | null
+  image_width: number
+  image_height: number
 }
 
 export interface Settings {

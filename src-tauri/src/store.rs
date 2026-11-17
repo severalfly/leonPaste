@@ -16,7 +16,6 @@ pub fn data_dir(app: &tauri::AppHandle) -> PathBuf {
 fn history_path(app: &tauri::AppHandle) -> PathBuf {
     data_dir(app).join("history.json")
 }
-
 fn settings_path(app: &tauri::AppHandle) -> PathBuf {
     data_dir(app).join("settings.json")
 }
@@ -48,6 +47,17 @@ pub fn save(app: &tauri::AppHandle, history: &[Entry], settings: &Settings) -> R
         fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+pub fn remove_images(app: &tauri::AppHandle, entries: &[Entry]) {
+    let dir = data_dir(app).join("images");
+    for e in entries {
+        if let Some(name) = &e.image {
+            let stem = name.trim_end_matches(".dib");
+            let _ = fs::remove_file(dir.join(format!("{}.dib", stem)));
+            let _ = fs::remove_file(dir.join(format!("{}.bmp", stem)));
+        }
+    }
 }
 
 pub fn prune(history: &mut Vec<Entry>, settings: &Settings) {

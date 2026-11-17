@@ -8,6 +8,8 @@ pub enum EntryKind {
     Code,
     Color,
     Path,
+    Image,
+    Files,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +21,30 @@ pub struct Entry {
     pub favorite: bool,
     pub created_at: u64,
     pub source: String,
+    /// 原图 DIB 文件名（data/images/<id>.dib），用于写回剪贴板
+    pub image: Option<String>,
+    /// 缩略图 data URL，仅在 list_history 返回时填充，不持久化
+    pub thumb: Option<String>,
+    pub image_width: u32,
+    pub image_height: u32,
+}
+
+impl Entry {
+    pub fn blank() -> Self {
+        Self {
+            id: String::new(),
+            kind: EntryKind::Text,
+            text: String::new(),
+            preview: String::new(),
+            favorite: false,
+            created_at: 0,
+            source: String::new(),
+            image: None,
+            thumb: None,
+            image_width: 0,
+            image_height: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,7 +79,8 @@ pub fn classify(text: &str) -> EntryKind {
     if t.starts_with("http://") || t.starts_with("https://") {
         return EntryKind::Link;
     }
-    if t.starts_with('#') && (t.len() == 4 || t.len() == 7 || t.len() == 9)
+    if t.starts_with('#')
+        && (t.len() == 4 || t.len() == 7 || t.len() == 9)
         && t[1..].chars().all(|c| c.is_ascii_hexdigit())
     {
         return EntryKind::Color;
@@ -73,7 +100,11 @@ pub fn classify(text: &str) -> EntryKind {
 }
 
 pub fn preview(text: &str) -> String {
-    text.replace(['\r', '\n', '\t'], " ").trim().chars().take(160).collect()
+    text.replace(['\r', '\n', '\t'], " ")
+        .trim()
+        .chars()
+        .take(200)
+        .collect()
 }
 
 pub fn now() -> u64 {
