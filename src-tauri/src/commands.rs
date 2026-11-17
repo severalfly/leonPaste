@@ -294,3 +294,16 @@ pub fn sync_clipboard(app: tauri::AppHandle) -> bool {
     let cap = clip::read();
     crate::clipboard::process_capture(&app, cap)
 }
+
+/// 无参数列表命令：彻底绕开 Tauri 2 的 camelCase / snake_case 参数映射问题。
+/// 筛选交给前端 computed，这里只负责返回全部条目与缩略图。
+#[tauri::command]
+pub fn list_all(app: tauri::AppHandle, state: State<'_, AppState>) -> Vec<Entry> {
+    let mut out: Vec<Entry> = { state.history.lock().unwrap().clone() };
+    fill_thumbs(&app, &mut out);
+    let n = crate::stats::LIST_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if n < 3 || n % 40 == 0 {
+        crate::log_line(&app, &format!("list_all -> {} items (call {})", out.len(), n));
+    }
+    out
+}

@@ -18,7 +18,8 @@ const defaultSettings: Settings = {
 const query = ref('')
 const filter = ref('all')
 const favoritesOnly = ref(false)
-const items = ref<Entry[]>([])
+const allItems = ref<Entry[]>([])
+const loadError = ref('')
 const selected = ref(0)
 const settings = ref<Settings>({ ...defaultSettings })
 const showSettings = ref(false)
@@ -74,6 +75,19 @@ const filters = [
   { id: 'path', label: '路径' },
 ]
 const hotkeys = ['Ctrl+Shift+V', 'Ctrl+Alt+V', 'Alt+V', 'Ctrl+`']
+const items = computed<Entry[]>(() => {
+  const q = query.value.trim().toLowerCase()
+  const f = filter.value
+  const fav = favoritesOnly.value
+  const out = allItems.value.filter((e) => {
+    if (fav && !e.favorite) return false
+    if (q && !e.text.toLowerCase().includes(q) && !e.preview.toLowerCase().includes(q)) return false
+    if (f !== 'all' && String(e.kind).toLowerCase() !== f) return false
+    return true
+  })
+  out.sort((a, b) => Number(b.favorite) - Number(a.favorite) || b.created_at - a.created_at)
+  return out.slice(0, 200)
+})
 const total = computed(() => items.value.length)
 
 function applyTheme() {
@@ -82,13 +96,11 @@ function applyTheme() {
 
 async function refresh() {
   try {
-    items.value = await invoke<Entry[]>('list_history', {
-      query: query.value,
-      filter: filter.value,
-      favorites_only: favoritesOnly.value,
-    })
-  } catch {
-    items.value = []
+    allItems.value = await invoke<Entry[]>('list_all')
+    loadError.value = ''
+  } catch (e) {
+    loadError.value = String(e)
+    allItems.value = []
   }
   if (selected.value >= items.value.length) {
     selected.value = Math.max(0, items.value.length - 1)
@@ -241,7 +253,6 @@ function onBlur() {
 
 watch([query, filter, favoritesOnly], () => {
   selected.value = 0
-  refresh()
 })
 
 onMounted(async () => {
@@ -270,7 +281,8 @@ onMounted(async () => {
   )
   const tick = async () => {
     try {
-      await invoke('sync_clipboard')
+      const captured = await invoke<boolean>('sync_clipboard')
+      if (captured || loadError.value) await refresh()
     } catch {
       /* WebView 未就绪时忽略，下一轮继续 */
     }
@@ -361,8 +373,10 @@ onUnmounted(() => {
         </div>
         <div v-if="items.length === 0" class="empty">
           <div class="empty-mark">▤</div>
-          <p v-if="diag && diag.entries > 0">有 {{ diag.entries }} 条记录，但被当前筛选隐藏了</p>
+          <p v-if="loadError">列表加载失败</p>
+          <p v-else-if="diag && diag.entries > 0">有 {{ diag.entries }} 条记录，当前条件下没有匹配项</p>
           <p v-else>还没有剪贴板记录</p>
+          <div v-if="loadError" class="load-error">{{ loadError }}</div>
           <span v-if="diag">
             监听{{ diag.monitor_alive ? '正常' : '异常' }} · 读取 {{ diag.opens }} 次 · 捕获 {{ diag.captures }} 条 · v{{ diag.version }}
           </span>

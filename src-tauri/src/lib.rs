@@ -243,6 +243,7 @@ pub fn run() {
             commands::open_data_dir,
             commands::probe_clipboard,
             commands::sync_clipboard,
+            commands::list_all,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
