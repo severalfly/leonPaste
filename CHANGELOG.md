@@ -2,6 +2,16 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.3] - 2026-11-17
+
+### 修复
+
+- **鼠标单击 / 双击卡片无法粘贴（回车却能）**：根因是 `onPointerDown` 中对 `.track` 调用了 `setPointerCapture(e.pointerId)`。指针捕获把 `pointerup` 重定向到 `.track`，而浏览器把 `click` 派发给 `pointerdown` 与 `pointerup` 目标的**最近公共祖先**（也是 `.track`），所以卡片上的 `@click` 永远收不到，单击与双击全部失效；键盘 `Enter` 走独立逻辑，因此正常。
+  - 移除 `setPointerCapture`，改用 window 级 `pointermove` / `pointerup` / `pointercancel` 监听，拖出卡片仍能继续横向滚动。
+  - 粘贴改由 `pointerup` 主触发：要求按下与松开落在同一张卡片、位移不超过 6px 死区；拖拽滚动不会误粘贴。
+  - `click` 保留为兜底，用 400ms 时间窗去重，避免重复写回剪贴板；双击按同卡片 250ms 去重，只粘贴一次。
+  - `.star` 收藏按钮仍由 `@click.stop` 独立处理；组件卸载时移除 window 级监听。
+
 ## [0.3.2] - 2026-11-17
 
 ### 托盘 / 进程退出排查与防护

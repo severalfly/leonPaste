@@ -1,6 +1,6 @@
 [package]
 name = "leonpaste"
-version = "0.3.2"
+version = "0.3.3"
 description = "A Paste-like clipboard history manager for Windows 10/11"
 authors = ["severalfly"]
 edition = "2021"

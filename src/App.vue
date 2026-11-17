@@ -42,6 +42,9 @@ let startX = 0
 let startScroll = 0
 let wheelAcc = 0
 let wheelRaf = 0
+let downCardIndex = -1
+let lastPointerPaste = 0
+let lastPastedIndex = -1
 
 const filters = [
   { id: 'all', label: '全部' },
@@ -240,26 +243,56 @@ function scrollBy(dir: number) {
   const step = card ? card.offsetWidth + 18 : 380
   el.scrollBy({ left: dir * step * 2, behavior: 'smooth' })
 }
+function cardIndexOf(target: EventTarget | null): number {
+  if (!(target instanceof HTMLElement)) return -1
+  const card = target.closest<HTMLElement>('.card')
+  if (!card || card.dataset.i === undefined) return -1
+  const i = Number(card.dataset.i)
+  return Number.isNaN(i) ? -1 : i
+}
+
 function onPointerDown(e: PointerEvent) {
-  if ((e.target as HTMLElement).closest('.star')) return
+  if (e.button !== 0) return
+  if (e.target instanceof HTMLElement && e.target.closest('.star')) return
+  downCardIndex = cardIndexOf(e.target)
   dragging = true
   moved = 0
   startX = e.clientX
   startScroll = trackEl.value?.scrollLeft ?? 0
-  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  // 不能 setPointerCapture：捕获会把 pointerup 重定向到 track，浏览器随后把
+  // click 派发给 pointerdown/pointerup 的公共祖先（track），卡片就永远收不到
+  // 点击 —— 这正是「回车能粘贴、鼠标单击双击都不行」的根因。
+  window.addEventListener('pointermove', onPointerMove)
+  window.addEventListener('pointerup', onPointerUp)
+  window.addEventListener('pointercancel', onPointerUp)
 }
 function onPointerMove(e: PointerEvent) {
   if (!dragging || !trackEl.value) return
   const dx = e.clientX - startX
+  if (Math.abs(dx) <= 6) return
   moved = Math.abs(dx)
   trackEl.value.scrollLeft = startScroll - dx
 }
-function onPointerUp() {
+function onPointerUp(e: PointerEvent) {
+  const wasDrag = moved > 6
+  const idx = downCardIndex
   dragging = false
+  downCardIndex = -1
+  window.removeEventListener('pointermove', onPointerMove)
+  window.removeEventListener('pointerup', onPointerUp)
+  window.removeEventListener('pointercancel', onPointerUp)
+  if (wasDrag || idx < 0 || cardIndexOf(e.target) !== idx) return
+  // 双击：同一张卡片 250ms 内只写回一次，避免粘贴两份
+  if (Date.now() - lastPointerPaste < 250 && lastPastedIndex === idx) return
+  lastPointerPaste = Date.now()
+  lastPastedIndex = idx
+  pasteAt(idx)
 }
-function onCardClick(i: number) {
-  if (moved > 6) return
-  pasteAt(i)
+// click 只作为兜底：pointerup 已处理时按时间窗去重，避免重复写回剪贴板。
+function onTrackClick(e: MouseEvent) {
+  if (moved > 6 || Date.now() - lastPointerPaste < 400) return
+  const i = cardIndexOf(e.target)
+  if (i >= 0) pasteAt(i)
 }
 
 function onKey(e: KeyboardEvent) {
@@ -348,6 +381,9 @@ onMounted(async () => {
 onUnmounted(() => {
   if (syncTimer) window.clearInterval(syncTimer)
   if (wheelRaf) cancelAnimationFrame(wheelRaf)
+  window.removeEventListener('pointermove', onPointerMove)
+  window.removeEventListener('pointerup', onPointerUp)
+  window.removeEventListener('pointercancel', onPointerUp)
   unlisteners.forEach((f) => f())
   window.removeEventListener('keydown', onCaptureKey, true)
   window.removeEventListener('keydown', onKey)
@@ -389,9 +425,7 @@ onUnmounted(() => {
         class="track"
         @wheel.prevent="onWheel"
         @pointerdown="onPointerDown"
-        @pointermove="onPointerMove"
-        @pointerup="onPointerUp"
-        @pointercancel="onPointerUp"
+        @click="onTrackClick"
       >
         <div
           v-for="(item, i) in items"
@@ -400,7 +434,6 @@ onUnmounted(() => {
           :class="{ sel: i === selected }"
           :style="{ '--i': i }"
           :data-i="i"
-          @click="onCardClick(i)"
         >
           <div class="card-head">
             <span class="badge" :class="`b-${item.kind}`">{{ kindGlyph(item.kind) }}</span>
