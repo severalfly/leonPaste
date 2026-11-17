@@ -7,12 +7,16 @@ import type { Diagnostics, Entry, ProbeResult, Settings } from './types'
 const defaultSettings: Settings = {
   max_items: 500,
   retention_days: 30,
-  hotkey: 'Ctrl+Shift+V',
+  hotkey: 'Alt+Shift+V',
   auto_paste: true,
   autostart: false,
   theme: 'dark',
   ignore_regex: '',
   paused: false,
+  show_filters: false,
+  show_statusbar: false,
+  focus_hide: true,
+  default_filter: 'all',
 }
 
 const query = ref('')
@@ -25,36 +29,8 @@ const settings = ref<Settings>({ ...defaultSettings })
 const showSettings = ref(false)
 const diag = ref<Diagnostics | null>(null)
 const probe = ref<ProbeResult | null>(null)
-
-async function probeClipboard() {
-  try {
-    probe.value = await invoke<ProbeResult>('probe_clipboard')
-    loadDiagnostics()
-  } catch {
-    probe.value = null
-  }
-}
-
-async function loadDiagnostics() {
-  try {
-    diag.value = await invoke<Diagnostics>('get_diagnostics')
-  } catch {
-    diag.value = null
-  }
-}
-function openSettings() {
-  showSettings.value = true
-  loadDiagnostics()
-}
-async function openDir() {
-  await invoke('open_data_dir')
-}
-function resetFilters() {
-  query.value = ''
-  filter.value = 'all'
-  favoritesOnly.value = false
-  refresh()
-}
+const dismissing = ref(false)
+const capturingHotkey = ref(false)
 const searchEl = ref<HTMLInputElement | null>(null)
 const trackEl = ref<HTMLElement | null>(null)
 const unlisteners: Array<() => void> = []
@@ -74,7 +50,7 @@ const filters = [
   { id: 'color', label: '颜色' },
   { id: 'path', label: '路径' },
 ]
-const hotkeys = ['Ctrl+Shift+V', 'Ctrl+Alt+V', 'Alt+V', 'Ctrl+`']
+
 const items = computed<Entry[]>(() => {
   const q = query.value.trim().toLowerCase()
   const f = filter.value
@@ -116,17 +92,46 @@ async function loadSettings() {
   }
 }
 
+async function loadDiagnostics() {
+  try {
+    diag.value = await invoke<Diagnostics>('get_diagnostics')
+  } catch {
+    diag.value = null
+  }
+}
+
+async function probeClipboard() {
+  try {
+    probe.value = await invoke<ProbeResult>('probe_clipboard')
+    loadDiagnostics()
+  } catch {
+    probe.value = null
+  }
+}
+
+function openSettings() {
+  showSettings.value = true
+  loadDiagnostics()
+}
+async function openDir() {
+  await invoke('open_data_dir')
+}
+function resetFilters() {
+  query.value = ''
+  filter.value = 'all'
+  favoritesOnly.value = false
+}
 function focusSearch() {
   nextTick(() => {
     searchEl.value?.focus()
     searchEl.value?.select()
   })
 }
-
 function ensureVisible(i: number) {
   nextTick(() => {
-    const el = document.querySelector<HTMLElement>(`.card[data-i="${i}"]`)
-    el?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
+    document.querySelector<HTMLElement>(`.card[data-i="${i}"]`)?.scrollIntoView({
+      behavior: 'smooth', inline: 'center', block: 'nearest',
+    })
   })
 }
 
@@ -136,24 +141,57 @@ async function pasteAt(i: number) {
   selected.value = i
   await invoke('paste_entry', { id: item.id })
 }
-
 async function toggleFavorite(item: Entry) {
   await invoke('toggle_favorite', { id: item.id })
 }
-
 async function removeItem(item: Entry) {
   await invoke('delete_entry', { id: item.id })
 }
-
 async function saveSettings() {
   await invoke('save_settings', { settings: settings.value })
   applyTheme()
   showSettings.value = false
   focusSearch()
 }
-
 async function clearAll() {
   await invoke('clear_history')
+}
+
+function dismiss() {
+  if (dismissing.value) return
+  dismissing.value = true
+  window.setTimeout(() => {
+    invoke('hide_window')
+    dismissing.value = false
+  }, 210)
+}
+
+function normalizeKey(e: KeyboardEvent): string | null {
+  if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return null
+  const c = e.code
+  if (c.startsWith('Key')) return c.slice(3)
+  if (c.startsWith('Digit')) return c.slice(5)
+  if (/^F\d{1,2}$/.test(c)) return c
+  const map: Record<string, string> = {
+    Space: 'Space', Enter: 'Enter', Tab: 'Tab', Backquote: '`',
+    Minus: '-', Equal: '=', Escape: 'Esc',
+  }
+  return map[c] ?? (e.key.length === 1 ? e.key.toUpperCase() : null)
+}
+
+function onCaptureKey(e: KeyboardEvent) {
+  if (!capturingHotkey.value) return
+  e.preventDefault()
+  e.stopPropagation()
+  const key = normalizeKey(e)
+  if (!key) return
+  const mods: string[] = []
+  if (e.ctrlKey) mods.push('Ctrl')
+  if (e.altKey) mods.push('Alt')
+  if (e.shiftKey) mods.push('Shift')
+  if (mods.length === 0) return
+  settings.value.hotkey = [...mods, key].join('+')
+  capturingHotkey.value = false
 }
 
 function fmtTime(ts: number) {
@@ -163,15 +201,11 @@ function fmtTime(ts: number) {
   const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
   return sameDay ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`
 }
-
 function kindLabel(k: string) {
-  return (
-    { text: '文本', link: '链接', code: '代码', color: '颜色', path: '路径', image: '图片', files: '文件' }[k] ??
-    '文本'
-  )
+  return ({ text: '文本', link: '链接', code: '代码', color: '颜色', path: '路径', image: '图片', files: '文件' }[k] ?? '文本')
 }
 function kindGlyph(k: string) {
-  return { text: 'T', link: '↗', code: '</>', color: '◧', path: '/', image: '▣', files: '≡' }[k] ?? 'T'
+  return ({ text: 'T', link: '↗', code: '</>', color: '◧', path: '/', image: '▣', files: '≡' }[k] ?? 'T')
 }
 function cardMeta(item: Entry) {
   if (item.kind === 'image') return `${item.image_width}×${item.image_height}`
@@ -182,11 +216,10 @@ function cardMeta(item: Entry) {
 function onWheel(e: WheelEvent) {
   const el = trackEl.value
   if (!el) return
-  const d = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX
-  el.scrollLeft += d * 1.15
+  el.scrollLeft += (Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX) * 1.2
 }
 function scrollBy(dir: number) {
-  trackEl.value?.scrollBy({ left: dir * 470, behavior: 'smooth' })
+  trackEl.value?.scrollBy({ left: dir * 620, behavior: 'smooth' })
 }
 function onPointerDown(e: PointerEvent) {
   if ((e.target as HTMLElement).closest('.star')) return
@@ -211,13 +244,14 @@ function onCardClick(i: number) {
 }
 
 function onKey(e: KeyboardEvent) {
+  if (capturingHotkey.value) return
   if (e.key === 'Escape') {
     e.preventDefault()
     if (showSettings.value) {
       showSettings.value = false
       focusSearch()
     } else {
-      invoke('hide_window')
+      dismiss()
     }
     return
   }
@@ -245,9 +279,10 @@ function onKey(e: KeyboardEvent) {
 }
 
 function onBlur() {
-  if (Date.now() - shownAt < 400) return
+  if (!settings.value.focus_hide) return
+  if (Date.now() - shownAt < 450) return
   window.setTimeout(() => {
-    if (!document.hasFocus()) invoke('hide_window')
+    if (!document.hasFocus() && !showSettings.value) dismiss()
   }, 120)
 }
 
@@ -258,37 +293,34 @@ watch([query, filter, favoritesOnly], () => {
 onMounted(async () => {
   await loadSettings()
   await loadDiagnostics()
+  filter.value = settings.value.default_filter || 'all'
   await refresh()
   focusSearch()
   unlisteners.push(
-    await listen('history-changed', () => {
-      refresh()
-      loadDiagnostics()
-    }),
+    await listen('history-changed', () => { refresh(); loadDiagnostics() }),
     await listen('settings-changed', () => loadSettings()),
     await listen('window-shown', () => {
       shownAt = Date.now()
+      dismissing.value = false
       query.value = ''
-      filter.value = 'all'
+      filter.value = settings.value.default_filter || 'all'
       favoritesOnly.value = false
+      showSettings.value = false
       refresh()
       loadDiagnostics()
       focusSearch()
-      nextTick(() => {
-        if (trackEl.value) trackEl.value.scrollLeft = 0
-      })
+      nextTick(() => { if (trackEl.value) trackEl.value.scrollLeft = 0 })
     }),
   )
   const tick = async () => {
     try {
       const captured = await invoke<boolean>('sync_clipboard')
       if (captured || loadError.value) await refresh()
-    } catch {
-      /* WebView 未就绪时忽略，下一轮继续 */
-    }
+    } catch { /* ignore */ }
   }
   await tick()
   syncTimer = window.setInterval(tick, 500)
+  window.addEventListener('keydown', onCaptureKey, true)
   window.addEventListener('keydown', onKey)
   window.addEventListener('blur', onBlur)
   window.addEventListener('focus', refresh)
@@ -297,6 +329,7 @@ onMounted(async () => {
 onUnmounted(() => {
   if (syncTimer) window.clearInterval(syncTimer)
   unlisteners.forEach((f) => f())
+  window.removeEventListener('keydown', onCaptureKey, true)
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('blur', onBlur)
   window.removeEventListener('focus', refresh)
@@ -304,7 +337,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="dock">
+  <div class="dock" :class="{ dismissing }">
     <header class="top" data-tauri-drag-region>
       <div class="search-wrap">
         <span class="search-icon">⌕</span>
@@ -313,23 +346,21 @@ onUnmounted(() => {
           v-model="query"
           class="search"
           type="text"
-          placeholder="搜索剪贴板历史…"
+          placeholder="搜索剪贴板"
           spellcheck="false"
         />
-        <span class="count">{{ total }} 项</span>
+        <span class="count">{{ total }}</span>
       </div>
-      <nav class="filters">
-        <button
-          v-for="f in filters"
-          :key="f.id"
-          class="filter"
-          :class="{ active: filter === f.id }"
-          @click="filter = f.id"
-        >{{ f.label }}</button>
-        <button class="filter star-filter" :class="{ active: favoritesOnly }" title="只看收藏" @click="favoritesOnly = !favoritesOnly">★</button>
-      </nav>
-      <button class="gear" title="设置" @click="openSettings">⚙</button>
+      <div class="top-actions">
+        <button class="icon-btn" title="设置" @click="openSettings">⚙</button>
+        <button class="icon-btn" title="收起到托盘" @click="dismiss">×</button>
+      </div>
     </header>
+
+    <nav v-if="settings.show_filters" class="filters">
+      <button v-for="f in filters" :key="f.id" class="filter" :class="{ active: filter === f.id }" @click="filter = f.id">{{ f.label }}</button>
+      <button class="filter star-filter" :class="{ active: favoritesOnly }" title="只看收藏" @click="favoritesOnly = !favoritesOnly">★</button>
+    </nav>
 
     <div class="track-wrap">
       <button class="nav prev" title="向左" @click="scrollBy(-1)">‹</button>
@@ -347,6 +378,7 @@ onUnmounted(() => {
           :key="item.id"
           class="card"
           :class="{ sel: i === selected }"
+          :style="{ '--i': i }"
           :data-i="i"
           @click="onCardClick(i)"
         >
@@ -354,12 +386,7 @@ onUnmounted(() => {
             <span class="badge" :class="`b-${item.kind}`">{{ kindGlyph(item.kind) }}</span>
             <span class="kind-name">{{ kindLabel(item.kind) }}</span>
             <span class="time">{{ fmtTime(item.created_at) }}</span>
-            <button
-              class="star"
-              :class="{ on: item.favorite }"
-              title="收藏 (Ctrl+D)"
-              @click.stop="toggleFavorite(item)"
-            >{{ item.favorite ? '★' : '☆' }}</button>
+            <button class="star" :class="{ on: item.favorite }" title="收藏 (Ctrl+D)" @click.stop="toggleFavorite(item)">{{ item.favorite ? '★' : '☆' }}</button>
           </div>
           <div class="card-body">
             <img v-if="item.thumb" :src="item.thumb" class="thumb" alt="图片预览" draggable="false" />
@@ -377,12 +404,8 @@ onUnmounted(() => {
           <p v-else-if="diag && diag.entries > 0">有 {{ diag.entries }} 条记录，当前条件下没有匹配项</p>
           <p v-else>还没有剪贴板记录</p>
           <div v-if="loadError" class="load-error">{{ loadError }}</div>
-          <span v-if="diag">
-            监听{{ diag.monitor_alive ? '正常' : '异常' }} · 读取 {{ diag.opens }} 次 · 捕获 {{ diag.captures }} 条 · v{{ diag.version }}
-          </span>
-          <span v-else>复制文本或截图后，会自动出现在这里</span>
           <div class="empty-actions">
-            <button v-if="(diag && diag.entries > 0) || query || filter !== 'all' || favoritesOnly" @click="resetFilters">清除筛选</button>
+            <button v-if="query || filter !== 'all' || favoritesOnly" @click="resetFilters">清除筛选</button>
             <button @click="probeClipboard">检测剪贴板</button>
           </div>
           <div v-if="probe" class="probe-inline" :class="{ bad: probe.busy }">{{ probe.kind }} · {{ probe.preview }}</div>
@@ -391,13 +414,13 @@ onUnmounted(() => {
       <button class="nav next" title="向右" @click="scrollBy(1)">›</button>
     </div>
 
-    <footer class="hint-bar">
+    <footer v-if="settings.show_statusbar" class="hint-bar">
       <span v-if="settings.paused" class="paused">● 已暂停记录</span>
       <span v-else class="live">● 正在记录</span>
       <span class="sep">|</span>
       <span>{{ settings.hotkey }} 唤起</span>
       <span class="grow" />
-      <span>滚轮 / 拖拽 / ←→ 浏览 · 点击或 Enter 复制 · Esc / 点击别处 关闭</span>
+      <span>滚轮 / 拖拽 / ←→ 浏览 · 点击或 Enter 复制 · Esc / 点击别处 收起</span>
     </footer>
 
     <div v-if="showSettings" class="drawer">
@@ -406,61 +429,59 @@ onUnmounted(() => {
         <button class="close" @click="showSettings = false; focusSearch()">×</button>
       </div>
       <div class="drawer-body">
-        <label class="field"><span>全局热键</span>
-          <select v-model="settings.hotkey"><option v-for="k in hotkeys" :key="k" :value="k">{{ k }}</option></select>
+        <div class="group-title">快捷键</div>
+        <div class="field hotkey-field">
+          <span>唤起 / 收起</span>
+          <span class="hotkey-value">{{ settings.hotkey }}</span>
+          <button class="mini" :class="{ recording: capturingHotkey }" @click="capturingHotkey = !capturingHotkey">
+            {{ capturingHotkey ? '请按下组合键…' : '录制' }}
+          </button>
+        </div>
+        <label class="field">
+          <span>或手动输入（如 Ctrl+Alt+V）</span>
+          <input v-model="settings.hotkey" type="text" spellcheck="false" />
         </label>
+
+        <div class="group-title">界面</div>
         <label class="field"><span>主题</span>
-          <select v-model="settings.theme">
-            <option value="dark">深色</option><option value="light">浅色</option><option value="auto">跟随系统</option>
-          </select>
+          <select v-model="settings.theme"><option value="dark">深色</option><option value="light">浅色</option><option value="auto">跟随系统</option></select>
         </label>
-        <label class="field"><span>最多保留条数</span><input v-model.number="settings.max_items" type="number" min="10" max="5000" /></label>
-        <label class="field"><span>保留天数（0 = 永久）</span><input v-model.number="settings.retention_days" type="number" min="0" max="3650" /></label>
+        <label class="field"><span>默认过滤</span>
+          <select v-model="settings.default_filter"><option v-for="f in filters" :key="f.id" :value="f.id">{{ f.label }}</option></select>
+        </label>
+        <label class="field checkbox"><input v-model="settings.show_filters" type="checkbox" /><span>主窗口显示过滤条</span></label>
+        <label class="field checkbox"><input v-model="settings.show_statusbar" type="checkbox" /><span>主窗口显示状态栏与快捷键提示</span></label>
+        <label class="field checkbox"><input v-model="settings.focus_hide" type="checkbox" /><span>点击其他应用时自动收起到托盘（不会退出）</span></label>
+
+        <div class="group-title">行为</div>
         <label class="field checkbox"><input v-model="settings.auto_paste" type="checkbox" /><span>选中后自动粘贴（模拟 Ctrl+V）</span></label>
         <label class="field checkbox"><input v-model="settings.autostart" type="checkbox" /><span>开机自动启动</span></label>
         <label class="field checkbox"><input v-model="settings.paused" type="checkbox" /><span>暂停记录</span></label>
-        <label class="field column"><span>忽略关键词（每行一个，命中则不记录）</span>
-          <textarea v-model="settings.ignore_regex" rows="2" placeholder="密码 / 令牌 / 密钥"></textarea>
-        </label>
+        <label class="field"><span>最多保留条数</span><input v-model.number="settings.max_items" type="number" min="10" max="5000" /></label>
+        <label class="field"><span>保留天数（0 = 永久）</span><input v-model.number="settings.retention_days" type="number" min="0" max="3650" /></label>
+        <label class="field column"><span>忽略关键词（每行一个）</span><textarea v-model="settings.ignore_regex" rows="2" placeholder="密码 / 令牌 / 密钥"></textarea></label>
 
+        <div class="group-title">关于与诊断</div>
         <div class="about">
           <div class="about-head">
-            <span>关于与诊断</span>
-            <span>
-              <button class="mini" @click="probeClipboard">检测剪贴板</button>
-              <button class="mini" @click="loadDiagnostics">刷新</button>
-            </span>
+            <span>版本与状态</span>
+            <span><button class="mini" @click="probeClipboard">检测剪贴板</button><button class="mini" @click="loadDiagnostics">刷新</button></span>
           </div>
           <div v-if="diag" class="about-grid">
             <div class="about-title">{{ diag.product }} {{ diag.version }}</div>
-            <div>开发者 {{ diag.developer }} · {{ diag.license }} 许可 · 构建 {{ diag.build_target }}</div>
+            <div>开发者 {{ diag.developer }} · {{ diag.license }} · 构建 {{ diag.build_target }}</div>
             <div class="repo">{{ diag.repository }}</div>
             <div class="diag-line">
               <span class="status-dot" :class="diag.monitor_alive ? 'ok' : 'bad'"></span>
-              监听{{ diag.monitor_alive ? '正常' : '异常' }}（{{ diag.last_tick_ago }}s 前心跳）
-              · 已记录 {{ diag.entries }} 条
-              · {{ diag.paused ? '已暂停' : '记录中' }}
-              · {{ diag.portable ? '便携模式' : '标准模式' }}
-              · 热键 {{ diag.hotkey }}
+              监听{{ diag.monitor_alive ? '正常' : '异常' }} · {{ diag.paused ? '已暂停' : '记录中' }} · {{ diag.portable ? '便携模式' : '标准模式' }}
             </div>
-            <div class="diag-counts">
-              循环 {{ diag.ticks }} · 成功读取 {{ diag.opens }} · 被占用 {{ diag.busy }} · 捕获 {{ diag.captures }}
-            </div>
+            <div class="diag-counts">循环 {{ diag.ticks }} · 读取 {{ diag.opens }} · 被占用 {{ diag.busy }} · 捕获 {{ diag.captures }} · 共 {{ diag.entries }} 条</div>
             <div v-if="probe" class="probe-box" :class="{ bad: probe.busy }">
-              <b>剪贴板探测：{{ probe.kind }}</b>
-              <div>签名 {{ probe.signature }}</div>
-              <div class="probe-preview">{{ probe.preview }}</div>
+              <b>剪贴板：{{ probe.kind }}</b><div>签名 {{ probe.signature }}</div><div class="probe-preview">{{ probe.preview }}</div>
             </div>
-            <div class="dir-row">
-              <span class="dir" :title="diag.data_dir">{{ diag.data_dir }}</span>
-              <button class="mini" @click="openDir">打开目录</button>
-            </div>
-            <details class="logbox">
-              <summary>最近日志（{{ diag.log_tail.length }} 行）</summary>
-              <pre><div v-for="(l, i) in diag.log_tail" :key="i">{{ l }}</div></pre>
-            </details>
+            <div class="dir-row"><span class="dir" :title="diag.data_dir">{{ diag.data_dir }}</span><button class="mini" @click="openDir">打开目录</button></div>
+            <details class="logbox"><summary>最近日志（{{ diag.log_tail.length }} 行）</summary><pre><div v-for="(l, i) in diag.log_tail" :key="i">{{ l }}</div></pre></details>
           </div>
-          <div v-else class="about-loading">读取诊断信息…</div>
         </div>
       </div>
       <div class="drawer-foot">

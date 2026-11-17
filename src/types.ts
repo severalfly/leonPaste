@@ -23,6 +23,10 @@ export interface Settings {
   theme: string
   ignore_regex: string
   paused: boolean
+  show_filters: boolean
+  show_statusbar: boolean
+  focus_hide: boolean
+  default_filter: string
 }
 
 export interface Diagnostics {

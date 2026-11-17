@@ -27,10 +27,13 @@ pub fn load(app: &tauri::AppHandle) -> (Vec<Entry>, Settings) {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    let settings: Settings = fs::read_to_string(settings_path(app))
+    let mut settings: Settings = fs::read_to_string(settings_path(app))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
+    if settings.hotkey == "Ctrl+Shift+V" {
+        settings.hotkey = "Alt+Shift+V".into();
+    }
     (history, settings)
 }
 

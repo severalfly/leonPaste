@@ -65,22 +65,6 @@ pub fn toggle_main(app: &tauri::AppHandle) {
     }
 }
 
-fn shortcut_from_str(s: &str) -> Shortcut {
-    match s {
-        "Ctrl+Alt+V" => Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyV),
-        "Alt+V" => Shortcut::new(Some(Modifiers::ALT), Code::KeyV),
-        "Ctrl+`" => Shortcut::new(Some(Modifiers::CONTROL), Code::Backquote),
-        _ => Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyV),
-    }
-}
-
-pub fn register_hotkey(app: &tauri::AppHandle, key: &str) -> Result<(), String> {
-    let gs = app.global_shortcut();
-    let _ = gs.unregister_all();
-    gs.register(shortcut_from_str(key))
-        .map_err(|e| e.to_string())
-}
-
 pub fn log_line(app: &tauri::AppHandle, msg: &str) {
     let p = store::data_dir(app).join("leonpaste.log");
     if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -90,6 +74,60 @@ pub fn log_line(app: &tauri::AppHandle, msg: &str) {
     {
         let _ = writeln!(f, "[{}] {}", types::now(), msg);
     }
+}
+
+fn parse_code(raw: &str) -> Option<Code> {
+    let u = raw.trim().to_uppercase();
+    const LETTERS: [Code; 26] = [
+        Code::KeyA, Code::KeyB, Code::KeyC, Code::KeyD, Code::KeyE, Code::KeyF,
+        Code::KeyG, Code::KeyH, Code::KeyI, Code::KeyJ, Code::KeyK, Code::KeyL,
+        Code::KeyM, Code::KeyN, Code::KeyO, Code::KeyP, Code::KeyQ, Code::KeyR,
+        Code::KeyS, Code::KeyT, Code::KeyU, Code::KeyV, Code::KeyW, Code::KeyX,
+        Code::KeyY, Code::KeyZ,
+    ];
+    const DIGITS: [Code; 10] = [
+        Code::Digit0, Code::Digit1, Code::Digit2, Code::Digit3, Code::Digit4,
+        Code::Digit5, Code::Digit6, Code::Digit7, Code::Digit8, Code::Digit9,
+    ];
+    if u.len() == 1 {
+        let b = u.as_bytes()[0];
+        if b.is_ascii_uppercase() {
+            return Some(LETTERS[(b - b'A') as usize]);
+        }
+        if b.is_ascii_digit() {
+            return Some(DIGITS[(b - b'0') as usize]);
+        }
+    }
+    Some(match u.as_str() {
+        "F1" => Code::F1, "F2" => Code::F2, "F3" => Code::F3, "F4" => Code::F4,
+        "F5" => Code::F5, "F6" => Code::F6, "F7" => Code::F7, "F8" => Code::F8,
+        "F9" => Code::F9, "F10" => Code::F10, "F11" => Code::F11, "F12" => Code::F12,
+        "SPACE" => Code::Space, "ENTER" => Code::Enter, "TAB" => Code::Tab,
+        "BACKQUOTE" | "`" => Code::Backquote, "MINUS" | "-" => Code::Minus,
+        "EQUAL" | "=" => Code::Equal, "ESC" | "ESCAPE" => Code::Escape,
+        _ => return None,
+    })
+}
+
+pub fn parse_shortcut(s: &str) -> Option<Shortcut> {
+    let mut mods = Modifiers::empty();
+    let mut key: Option<Code> = None;
+    for part in s.split('+') {
+        match part.trim().to_lowercase().as_str() {
+            "ctrl" | "control" => mods |= Modifiers::CONTROL,
+            "alt" => mods |= Modifiers::ALT,
+            "shift" => mods |= Modifiers::SHIFT,
+            other => key = parse_code(other),
+        }
+    }
+    Some(Shortcut::new(if mods.is_empty() { None } else { Some(mods) }, key?))
+}
+
+pub fn register_hotkey(app: &tauri::AppHandle, key: &str) -> Result<(), String> {
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    let sc = parse_shortcut(key).ok_or_else(|| format!("无法识别快捷键: {}", key))?;
+    gs.register(sc).map_err(|e| e.to_string())
 }
 
 pub fn foreground_title() -> String {
@@ -164,7 +202,14 @@ pub fn run() {
             let clear_i = MenuItem::with_id(app, "clear", "清空历史（保留收藏）", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "退出 leonPaste", true, None::<&str>)?;
             let sep = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&show_i, &pause_i, &clear_i, &sep, &quit_i])?;
+            let status_i = MenuItem::with_id(
+                app,
+                "status",
+                &format!("leonPaste {} · 后台运行中 · {} 唤起", env!("CARGO_PKG_VERSION"), hotkey),
+                false,
+                None::<&str>,
+            )?;
+            let menu = Menu::with_items(app, &[&status_i, &sep, &show_i, &pause_i, &clear_i, &sep, &quit_i])?;
 
             let tray_result = TrayIconBuilder::new()
                 .icon(app.default_window_icon().expect("window icon").clone())

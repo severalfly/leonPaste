@@ -48,6 +48,7 @@ impl Entry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub max_items: usize,
     pub retention_days: u32,
@@ -57,6 +58,10 @@ pub struct Settings {
     pub theme: String,
     pub ignore_regex: String,
     pub paused: bool,
+    pub show_filters: bool,
+    pub show_statusbar: bool,
+    pub focus_hide: bool,
+    pub default_filter: String,
 }
 
 impl Default for Settings {
@@ -64,12 +69,16 @@ impl Default for Settings {
         Self {
             max_items: 500,
             retention_days: 30,
-            hotkey: "Ctrl+Shift+V".into(),
+            hotkey: "Alt+Shift+V".into(),
             auto_paste: true,
             autostart: false,
             theme: "dark".into(),
             ignore_regex: String::new(),
             paused: false,
+            show_filters: false,
+            show_statusbar: false,
+            focus_hide: true,
+            default_filter: "all".into(),
         }
     }
 }
