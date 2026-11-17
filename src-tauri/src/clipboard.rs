@@ -135,8 +135,10 @@ pub fn process_capture(app: &tauri::AppHandle, cap: clip::Capture) -> bool {
     true
 }
 
+/// 后台线程继续读剪贴板（窗口隐藏时 WebView2 会节流 JS 定时器，主线程
+/// sync_clipboard 可能变慢），但所有读写已被 CLIP_LOCK 串行化。
 pub fn start_monitor(app: tauri::AppHandle) {
-    log_line(&app, "monitor-start (background thread)");
+    log_line(&app, "monitor-start (background thread, serialized clipboard access)");
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(180));
         let a = app.clone();

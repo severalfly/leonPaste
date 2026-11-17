@@ -67,6 +67,8 @@ writeFileSync(join(out, 'README.txt'), `leonPaste ${version} - Windows 便携版
 Win11 自带 WebView2 运行时；Win10 若未安装，首次启动会提示下载。
 请勿删除同目录的 WebView2Loader.dll。
 
+【稳定】剪贴板内存改为安全复制（ReadProcessMemory），不再对外部指针建裸切片；
+  避免延迟渲染 / 失效句柄导致的 0xC0000005 崩溃；所有剪贴板读写串行化，无并发竞态
 【隐私】数据纯本地保存，不联网、不上传。
 「忽略关键词」可让含密码等字样的内容不进入历史；托盘可暂停记录。
 诊断日志：data\\leonpaste.log

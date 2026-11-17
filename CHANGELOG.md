@@ -2,6 +2,20 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.7] - 2026-11-17
+
+### 修复：0xC0000005 根因（剪贴板裸指针读取）
+
+用户提供了崩溃现场的完整日志，结尾明确出现 `SEH_EXCEPTION code=0xC0000005`（access violation），且这次**没有切换显示器**。崩溃前是 `captured` → `hide` → `skip: duplicate`，即剪贴板读取路径；此前大量 `alive` 心跳持续、`tray=true`，说明进程一直健康直到 native 层硬崩溃。这解释了此前所有日志为什么没有 `PANIC` / `exit` / `quit` —— `catch_unwind` 拦不住 access violation。
+
+根因：`clip::read()` 用 `GlobalLock` 拿到剪贴板全局内存指针后，直接 `std::slice::from_raw_parts(p, n)` 建裸切片并按 `GlobalSize` 读取。当剪贴板由其它程序**延迟渲染**、句柄在读取期间失效、或 `GlobalSize` 与实际可读内存不符时，就会越界访问；后台线程（180ms）与前端主线程（500ms）并发 `OpenClipboard` / `GlobalLock` 进一步放大竞态。
+
+- **不再对剪贴板内存建裸切片**：新增 `copy_global()`，用 `ReadProcessMemory(GetCurrentProcess(), ...)` 从自身进程安全复制，内核做地址探测，指针失效只返回 FALSE；文本上限 16MB、位图 32MB、HDROP 64KB。`CF_UNICODETEXT` 复制出字节后用 `u16::from_le_bytes` 解码（含 NUL 截断），`CF_DIB` 同样走复制；`CF_HDROP` 先用一次复制确认内存可读再调 `DragQueryFileW`，文件数加 4096 上限。
+- **串行化所有剪贴板读写**：新增全局 `CLIP_LOCK`，`read()` / `write_text()` / `write_clipboard_dib()` 全部先取锁，后台线程（180ms）与前端主线程（500ms）不再并发 `OpenClipboard` / `GlobalLock`。保留双路径是因为窗口隐藏时 WebView2 会节流 JS 定时器，后台线程才能保证持续捕获。
+- **崩溃上下文**：`LAST_OP` 原子码记录崩溃前阶段（0 空闲 / 1 打开剪贴板 / 2 文件列表 / 3 文本 / 4 位图），SEH 日志现在输出 `last_op=N`，用 Drop guard 自动归零。
+- `dib.rs` 里同样存在裸切片的 `read_clipboard_dib`（dead code）一并改用 `copy_global`。
+- 新增 windows-sys feature `Win32_System_Threading`；0.3.5 切屏自愈、0.3.6 设置页修复全部保留。
+
 ## [0.3.6] - 2026-11-17
 
 ### 设置页布局与失焦行为

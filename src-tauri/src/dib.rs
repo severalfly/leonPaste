@@ -3,7 +3,7 @@ use windows_sys::Win32::System::{
         CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
         OpenClipboard, SetClipboardData,
     },
-    Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
+    Memory::{GlobalAlloc, GlobalLock, GlobalUnlock},
 };
 
 pub const CF_DIB: u32 = 8;
@@ -156,21 +156,15 @@ pub fn read_clipboard_dib() -> Option<Vec<u8>> {
             CloseClipboard();
             return None;
         }
-        let p = GlobalLock(h) as *const u8;
-        let mut out = Vec::new();
-        if !p.is_null() {
-            let n = GlobalSize(h);
-            if n > 0 && n < 32 * 1024 * 1024 {
-                out = std::slice::from_raw_parts(p, n).to_vec();
-            }
-            GlobalUnlock(h);
-        }
+        // 与 clip::read 一样走安全复制，不再对剪贴板指针建裸切片
+        let out = crate::clip::copy_global(h, 32 * 1024 * 1024);
         CloseClipboard();
         if out.is_empty() { None } else { Some(out) }
     }
 }
 
 pub fn write_clipboard_dib(dib: &[u8]) -> bool {
+    let _serial = crate::CLIP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         if OpenClipboard(std::ptr::null_mut()) == 0 {
             return false;

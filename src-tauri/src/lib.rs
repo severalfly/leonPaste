@@ -11,7 +11,7 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
         Mutex, OnceLock,
     },
     time::Duration,
@@ -37,6 +37,10 @@ pub struct AppState {
 pub static USER_QUIT: AtomicBool = AtomicBool::new(false);
 /// 供 SEH 崩溃回调使用的日志路径（崩溃时只能用最简单的文件 IO）。
 static CRASH_LOG: OnceLock<String> = OnceLock::new();
+/// 所有剪贴板读写共用一把锁，杜绝后台线程与主线程并发 OpenClipboard / GlobalLock。
+pub static CLIP_LOCK: Mutex<()> = Mutex::new(());
+/// 崩溃前的最后操作码：0=空闲 1=打开剪贴板 2=文件列表 3=文本 4=位图。
+pub static LAST_OP: AtomicU8 = AtomicU8::new(0);
 /// 显示器变化后的托盘重建防重入。
 static REBUILD_PENDING: AtomicBool = AtomicBool::new(false);
 
@@ -179,7 +183,12 @@ unsafe extern "system" fn crash_filter(info: *const EXCEPTION_POINTERS) -> i32 {
     if let Some(p) = CRASH_LOG.get() {
         append_log(
             std::path::Path::new(p),
-            &format!("[{}] SEH_EXCEPTION code=0x{:08X}", types::now(), code),
+            &format!(
+                "[{}] SEH_EXCEPTION code=0x{:08X} last_op={}",
+                types::now(),
+                code,
+                LAST_OP.load(Ordering::Relaxed)
+            ),
         );
     }
     1 // EXCEPTION_EXECUTE_HANDLER
