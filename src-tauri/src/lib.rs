@@ -37,6 +37,8 @@ pub struct AppState {
 pub static USER_QUIT: AtomicBool = AtomicBool::new(false);
 /// 供 SEH 崩溃回调使用的日志路径（崩溃时只能用最简单的文件 IO）。
 static CRASH_LOG: OnceLock<String> = OnceLock::new();
+/// 显示器变化后的托盘重建防重入。
+static REBUILD_PENDING: AtomicBool = AtomicBool::new(false);
 
 fn cursor_point() -> Option<(i32, i32)> {
     use windows_sys::Win32::Foundation::POINT;
@@ -299,16 +301,83 @@ fn ensure_tray(app: &tauri::AppHandle, refresh: bool) {
     rebuild_tray(app);
 }
 
-/// 每分钟一行心跳。日志尾部可直接区分：进程崩溃 / 被要求退出 / 进程仍在运行。
+/// 显示器数量 / 分辨率 / 缩放 / 位置的指纹。外接屏 ↔ 笔记本屏切换时一定会变。
+fn monitor_signature(app: &tauri::AppHandle) -> String {
+    app.available_monitors()
+        .map(|list| {
+            let mut v: Vec<String> = list
+                .iter()
+                .map(|m| {
+                    let s = m.size();
+                    let p = m.position();
+                    format!(
+                        "{}x{}@{}+{}+{}",
+                        s.width,
+                        s.height,
+                        (m.scale_factor() * 100.0) as u32,
+                        p.x,
+                        p.y
+                    )
+                })
+                .collect();
+            v.sort();
+            format!("{}={}", v.len(), v.join(","))
+        })
+        .unwrap_or_else(|_| "err".to_string())
+}
+
+/// 显示器拓扑变化后 Windows 会重建通知区域，托盘图标常被清掉。
+/// 在累计 1s / 3s / 8s / 15s 分四次重建，覆盖 explorer 重建的整个时间窗。
+fn schedule_tray_rebuild(app: &tauri::AppHandle) {
+    if REBUILD_PENDING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let h = app.clone();
+    std::thread::spawn(move || {
+        for delay in [1000u64, 2000, 5000, 7000] {
+            std::thread::sleep(Duration::from_millis(delay));
+            if USER_QUIT.load(Ordering::SeqCst) {
+                break;
+            }
+            let hh = h.clone();
+            if h.run_on_main_thread(move || {
+                log_line(&hh, "tray-rebuild-after-display-change");
+                rebuild_tray(&hh);
+            })
+            .is_err()
+            {
+                break;
+            }
+        }
+        REBUILD_PENDING.store(false, Ordering::SeqCst);
+    });
+}
+
+/// 每 5 秒检测显示器拓扑；alive 每 20 秒一条。日志尾部可直接区分：
+/// 进程崩溃 / 被要求退出 / 进程仍在运行，以及退出是否发生在切屏瞬间。
 fn start_heartbeat(app: tauri::AppHandle) {
+    let initial = monitor_signature(&app);
+    log_line(&app, &format!("display-topology: {}", initial));
     std::thread::spawn(move || {
         let mut n: u64 = 0;
+        let mut last_sig = initial;
         loop {
-            std::thread::sleep(Duration::from_secs(20));
+            std::thread::sleep(Duration::from_secs(5));
             if USER_QUIT.load(Ordering::SeqCst) {
                 break;
             }
             n += 1;
+            // 切屏瞬间不碰窗口（fit_window 只在用户唤起面板时执行），
+            // 避免 DPI 切换过程中 resize WebView2 窗口。
+            let sig = monitor_signature(&app);
+            if sig != last_sig {
+                log_line(&app, &format!("display-topology-changed: {} -> {}", last_sig, sig));
+                last_sig = sig.clone();
+                schedule_tray_rebuild(&app);
+            }
+            if n % 4 != 0 {
+                continue;
+            }
             let (tick, entries) = {
                 let s = app.state::<AppState>();
                 let t = s.last_tick.load(Ordering::SeqCst);
@@ -316,10 +385,9 @@ fn start_heartbeat(app: tauri::AppHandle) {
                 (t, n)
             };
             let tray_alive = app.tray_by_id("main").is_some();
-            log_line(&app, &format!("alive #{} tick={} entries={} tray={}", n, tick, entries, tray_alive));
-            // 每 60 秒在主线程无条件重建托盘：通知区域图标被 explorer 重启或系统
-            // 清理时，仅靠 set_icon 刷新不一定能恢复，直接删除再添加最可靠。
-            if n % 3 == 0 {
+            log_line(&app, &format!("alive #{} tick={} entries={} tray={} mon={}", n / 4, tick, entries, tray_alive, sig));
+            // 每 60 秒在主线程无条件重建托盘，作为兜底
+            if (n / 4) % 3 == 0 {
                 let h = app.clone();
                 let _ = app.run_on_main_thread(move || {
                     log_line(&h, "tray-periodic-rebuild: begin");
