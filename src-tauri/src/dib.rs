@@ -160,7 +160,7 @@ pub fn read_clipboard_dib() -> Option<Vec<u8>> {
         let mut out = Vec::new();
         if !p.is_null() {
             let n = GlobalSize(h);
-            if n > 0 && n < 256 * 1024 * 1024 {
+            if n > 0 && n < 32 * 1024 * 1024 {
                 out = std::slice::from_raw_parts(p, n).to_vec();
             }
             GlobalUnlock(h);

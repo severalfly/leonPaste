@@ -48,7 +48,7 @@ unsafe fn lock_bytes(h: *mut std::ffi::c_void) -> Vec<u8> {
         return Vec::new();
     }
     let n = GlobalSize(h);
-    let out = if n > 0 && n < 256 * 1024 * 1024 {
+    let out = if n > 0 && n < 32 * 1024 * 1024 {
         std::slice::from_raw_parts(p, n).to_vec()
     } else {
         Vec::new()
@@ -89,12 +89,12 @@ pub fn read() -> Capture {
             if !h.is_null() {
                 let p = GlobalLock(h) as *const u16;
                 if !p.is_null() {
-                    let max = GlobalSize(h) / 2;
-                    let mut len = 0usize;
-                    while len < max && *p.add(len) != 0 {
-                        len += 1;
-                    }
-                    let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
+                    // 按 GlobalSize 一次性建切片并限制上限，避免无 NUL 结尾或异常大小时越界
+                    let bytes = GlobalSize(h).min(16 * 1024 * 1024);
+                    let units = bytes / 2;
+                    let wide = std::slice::from_raw_parts(p, units);
+                    let len = wide.iter().position(|&c| c == 0).unwrap_or(units);
+                    let s = String::from_utf16_lossy(&wide[..len]);
                     GlobalUnlock(h);
                     if !s.trim().is_empty() {
                         CloseClipboard();

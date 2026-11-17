@@ -223,7 +223,7 @@ function onWheel(e: WheelEvent) {
   else if (e.deltaMode === 2) d *= el.clientWidth
   if (d === 0) return
   // 触控板 / 高 DPI 下的小增量也要能推动列表
-  if (Math.abs(d) < 120) d = Math.sign(d) * 120
+  if (Math.abs(d) < 100) d = Math.sign(d) * 100
   wheelAcc += d * 1.15
   if (wheelRaf) return
   wheelRaf = requestAnimationFrame(() => {

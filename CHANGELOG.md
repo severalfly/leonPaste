@@ -2,6 +2,25 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.2] - 2026-11-17
+
+### 托盘 / 进程退出排查与防护
+
+用户复现「托盘图标自动消失」。审读全部 Rust 源码后列出可能路径：剪贴板 unsafe 读取越界、Mutex poison 级联、主窗口被销毁后 Tauri 默认退出、Windows 通知区域图标被系统清理。逐项处理：
+
+- 全局 panic hook 把任意线程的 panic 写入 `data\leonpaste.log`（含消息与文件行号）。
+- 所有 `Mutex::lock().unwrap()` 改为 poison 容错，杜绝单线程 panic 拖垮全进程。
+- `sync_clipboard` / `probe_clipboard` / 后台监听线程用 `catch_unwind` 包裹；CF_UNICODETEXT 改为按 `GlobalSize` 一次性建切片，不再逐字符找 NUL；文本上限 16MB、位图上限 32MB。
+- 拦截 `CloseRequested`（改为隐藏窗口）与所有非托盘菜单触发的 `ExitRequested`（`prevent_exit`）；窗口被意外销毁也不会退出。
+- 托盘显式 id `main`：唤起时刷新图标（应对资源管理器重启后图标被清掉），每分钟心跳检测，对象丢失自动重建整套托盘与菜单。
+- 每分钟一条 `alive #N tick=... entries=...`，正常结束写 `exit: event loop ended`。看日志尾部即可区分：硬崩溃 / panic / 被误要求退出 / 进程仍在但图标被系统清理。
+- 诊断页的日志列表过滤心跳行，避免每分钟一条把有效事件挤掉。
+
+### 变更
+
+- 按反馈把单个候选框整体缩小约 20%：卡片宽度 `clamp(256px, 20vw, 336px)`，内边距、字号、预览行数、图标、搜索框回到 0.3.0 的紧凑尺寸。
+- 窗口高度从 340–520 回调到 320–440（大屏约 440，接近 0.3.0 的 430）；**横向铺满左右与跨屏自适应保持不变**。
+
 ## [0.3.1] - 2026-11-17
 
 ### 修复

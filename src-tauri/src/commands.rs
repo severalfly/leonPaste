@@ -31,7 +31,7 @@ pub fn list_history(
     favorites_only: bool,
 ) -> Vec<Entry> {
     let q = query.trim().to_lowercase();
-    let history = state.history.lock().unwrap();
+    let history = state.history.lock().unwrap_or_else(|e| e.into_inner());
     let mut out: Vec<Entry> = history
         .iter()
         .filter(|e| {
@@ -72,7 +72,7 @@ pub fn paste_entry(
     id: String,
 ) -> Result<(), String> {
     let entry = {
-        let history = state.history.lock().unwrap();
+        let history = state.history.lock().unwrap_or_else(|e| e.into_inner());
         history
             .iter()
             .find(|e| e.id == id)
@@ -91,7 +91,7 @@ pub fn paste_entry(
             return Err("写入剪贴板失败".to_string());
         }
     }
-    let auto_paste = { state.settings.lock().unwrap().auto_paste };
+    let auto_paste = { state.settings.lock().unwrap_or_else(|e| e.into_inner()).auto_paste };
     crate::hide_main(&app);
     if auto_paste {
         std::thread::spawn(|| {
@@ -105,11 +105,11 @@ pub fn paste_entry(
 #[tauri::command]
 pub fn toggle_favorite(app: tauri::AppHandle, state: State<'_, AppState>, id: String) {
     let (snapshot, settings) = {
-        let mut history = state.history.lock().unwrap();
+        let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(e) = history.iter_mut().find(|e| e.id == id) {
             e.favorite = !e.favorite;
         }
-        (history.clone(), state.settings.lock().unwrap().clone())
+        (history.clone(), state.settings.lock().unwrap_or_else(|e| e.into_inner()).clone())
     };
     let _ = store::save(&app, &snapshot, &settings);
     let _ = app.emit("history-changed", ());
@@ -118,10 +118,10 @@ pub fn toggle_favorite(app: tauri::AppHandle, state: State<'_, AppState>, id: St
 #[tauri::command]
 pub fn delete_entry(app: tauri::AppHandle, state: State<'_, AppState>, id: String) {
     let (removed, snapshot, settings) = {
-        let mut history = state.history.lock().unwrap();
+        let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
         let removed: Vec<Entry> = history.iter().filter(|e| e.id == id).cloned().collect();
         history.retain(|e| e.id != id);
-        (removed, history.clone(), state.settings.lock().unwrap().clone())
+        (removed, history.clone(), state.settings.lock().unwrap_or_else(|e| e.into_inner()).clone())
     };
     store::remove_images(&app, &removed);
     let _ = store::save(&app, &snapshot, &settings);
@@ -131,10 +131,10 @@ pub fn delete_entry(app: tauri::AppHandle, state: State<'_, AppState>, id: Strin
 #[tauri::command]
 pub fn clear_history(app: tauri::AppHandle, state: State<'_, AppState>) {
     let (removed, snapshot, settings) = {
-        let mut history = state.history.lock().unwrap();
+        let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
         let removed: Vec<Entry> = history.iter().filter(|e| !e.favorite).cloned().collect();
         history.retain(|e| e.favorite);
-        (removed, history.clone(), state.settings.lock().unwrap().clone())
+        (removed, history.clone(), state.settings.lock().unwrap_or_else(|e| e.into_inner()).clone())
     };
     store::remove_images(&app, &removed);
     let _ = store::save(&app, &snapshot, &settings);
@@ -143,7 +143,7 @@ pub fn clear_history(app: tauri::AppHandle, state: State<'_, AppState>) {
 
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Settings {
-    state.settings.lock().unwrap().clone()
+    state.settings.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 #[tauri::command]
@@ -152,7 +152,7 @@ pub fn save_settings(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<(), String> {
-    let old = { state.settings.lock().unwrap().clone() };
+    let old = { state.settings.lock().unwrap_or_else(|e| e.into_inner()).clone() };
     if old.hotkey != settings.hotkey {
         if let Err(e) = crate::register_hotkey(&app, &settings.hotkey) {
             crate::log_line(&app, &format!("hotkey-change-failed: {}", e));
@@ -168,10 +168,10 @@ pub fn save_settings(
         }
     }
     {
-        let mut guard = state.settings.lock().unwrap();
+        let mut guard = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         *guard = settings.clone();
     }
-    let history = { state.history.lock().unwrap().clone() };
+    let history = { state.history.lock().unwrap_or_else(|e| e.into_inner()).clone() };
     store::save(&app, &history, &settings)?;
     let _ = app.emit("settings-changed", ());
     Ok(())
@@ -216,11 +216,15 @@ pub fn get_diagnostics(app: tauri::AppHandle, state: State<'_, AppState>) -> Dia
     let dir = store::data_dir(&app);
     let tick = state.last_tick.load(std::sync::atomic::Ordering::SeqCst);
     let ago = secs_now().saturating_sub(tick);
-    let settings = { state.settings.lock().unwrap().clone() };
-    let entries = { state.history.lock().unwrap().len() };
+    let settings = { state.settings.lock().unwrap_or_else(|e| e.into_inner()).clone() };
+    let entries = { state.history.lock().unwrap_or_else(|e| e.into_inner()).len() };
     let log_tail = std::fs::read_to_string(dir.join("leonpaste.log"))
         .map(|s| {
-            let lines: Vec<String> = s.lines().map(|l| l.to_string()).collect();
+            let lines: Vec<String> = s
+                .lines()
+                .filter(|l| !l.contains("alive #"))
+                .map(|l| l.to_string())
+                .collect();
             lines.iter().rev().take(12).cloned().rev().collect()
         })
         .unwrap_or_default();
@@ -261,6 +265,7 @@ pub struct ProbeResult {
 
 #[tauri::command]
 pub fn probe_clipboard() -> ProbeResult {
+    let safe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
     let cap = clip::read();
     let kind = cap.name().to_string();
     let signature = cap.signature();
@@ -272,13 +277,21 @@ pub fn probe_clipboard() -> ProbeResult {
         clip::Capture::Empty => "剪贴板为空".into(),
         clip::Capture::Busy => "剪贴板被其他程序占用，读取失败".into(),
     };
-    ProbeResult {
-        kind,
-        signature,
-        preview,
-        busy,
+        ProbeResult {
+            kind,
+            signature,
+            preview,
+            busy,
+            opens: crate::stats::OPENS.load(std::sync::atomic::Ordering::Relaxed),
+        }
+    }));
+    safe.unwrap_or_else(|_| ProbeResult {
+        kind: "error".into(),
+        signature: String::new(),
+        preview: "读取剪贴板时发生异常，已被拦截".into(),
+        busy: false,
         opens: crate::stats::OPENS.load(std::sync::atomic::Ordering::Relaxed),
-    }
+    })
 }
 
 #[tauri::command]
@@ -291,15 +304,24 @@ pub fn open_data_dir(app: tauri::AppHandle) {
 /// 与后台线程共享 last_sig 去重，作为主捕获路径的保险。
 #[tauri::command]
 pub fn sync_clipboard(app: tauri::AppHandle) -> bool {
-    let cap = clip::read();
-    crate::clipboard::process_capture(&app, cap)
+    let a = app.clone();
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let cap = clip::read();
+        crate::clipboard::process_capture(&a, cap)
+    })) {
+        Ok(v) => v,
+        Err(_) => {
+            crate::log_line(&app, "sync_clipboard: panic recovered");
+            false
+        }
+    }
 }
 
 /// 无参数列表命令：彻底绕开 Tauri 2 的 camelCase / snake_case 参数映射问题。
 /// 筛选交给前端 computed，这里只负责返回全部条目与缩略图。
 #[tauri::command]
 pub fn list_all(app: tauri::AppHandle, state: State<'_, AppState>) -> Vec<Entry> {
-    let mut out: Vec<Entry> = { state.history.lock().unwrap().clone() };
+    let mut out: Vec<Entry> = { state.history.lock().unwrap_or_else(|e| e.into_inner()).clone() };
     fill_thumbs(&app, &mut out);
     let n = crate::stats::LIST_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if n < 3 || n % 40 == 0 {

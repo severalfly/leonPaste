@@ -9,10 +9,12 @@ pub mod types;
 use crate::types::{Entry, Settings};
 use std::{
     io::Write,
+    path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicU64},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Mutex,
     },
+    time::Duration,
 };
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -29,6 +31,9 @@ pub struct AppState {
     pub last_tick: AtomicU64,
     pub last_sig: Mutex<String>,
 }
+
+/// 只有托盘菜单「退出」会置位；其余任何退出请求一律拦下并记日志。
+pub static USER_QUIT: AtomicBool = AtomicBool::new(false);
 
 fn cursor_point() -> Option<(i32, i32)> {
     use windows_sys::Win32::Foundation::POINT;
@@ -74,7 +79,7 @@ fn fit_window(app: &tauri::AppHandle) {
     let logical_w = sw as f64 / scale;
     let logical_h = sh as f64 / scale;
     let width = (logical_w - 28.0).max(680.0);
-    let height = (logical_h * 0.58).clamp(340.0, 520.0);
+    let height = (logical_h * 0.46).clamp(320.0, 440.0);
 
     let phys_w = (width * scale).round() as u32;
     let phys_h = (height * scale).round() as u32;
@@ -87,6 +92,7 @@ fn fit_window(app: &tauri::AppHandle) {
 }
 
 pub fn show_main(app: &tauri::AppHandle) {
+    ensure_tray(app, true);
     if let Some(w) = app.get_webview_window("main") {
         fit_window(app);
         let _ = w.show();
@@ -120,6 +126,158 @@ pub fn log_line(app: &tauri::AppHandle, msg: &str) {
     {
         let _ = writeln!(f, "[{}] {}", types::now(), msg);
     }
+}
+
+fn append_log(path: &std::path::Path, line: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(f, "{}", line);
+    }
+}
+
+/// 任何线程里的 panic 都先写进日志，便于事后判断退出原因。
+fn install_panic_hook(path: PathBuf) {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = if let Some(v) = info.payload().downcast_ref::<&str>() {
+            (*v).to_string()
+        } else if let Some(v) = info.payload().downcast_ref::<String>() {
+            v.clone()
+        } else {
+            "unknown payload".to_string()
+        };
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_default();
+        append_log(&path, &format!("[{}] PANIC: {} @ {}", types::now(), msg, loc));
+        default_hook(info);
+    }));
+}
+
+/// 托盘是唯一的常驻入口，抽成函数便于丢失后整体重建。
+fn build_tray(app: &tauri::AppHandle, hotkey: &str) -> Result<(), String> {
+    let show_i = MenuItem::with_id(app, "show", "显示 / 隐藏", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let pause_i = MenuItem::with_id(app, "pause", "暂停 / 恢复记录", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let clear_i = MenuItem::with_id(app, "clear", "清空历史（保留收藏）", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let quit_i = MenuItem::with_id(app, "quit", "退出 leonPaste", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let sep = PredefinedMenuItem::separator(app).map_err(|e| e.to_string())?;
+    let status_i = MenuItem::with_id(
+        app,
+        "status",
+        &format!("leonPaste {} · 后台运行中 · {} 唤起", env!("CARGO_PKG_VERSION"), hotkey),
+        false,
+        None::<&str>,
+    )
+    .map_err(|e| e.to_string())?;
+    let menu = Menu::with_items(app, &[&status_i, &sep, &show_i, &pause_i, &clear_i, &sep, &quit_i])
+        .map_err(|e| e.to_string())?;
+    let icon = app
+        .default_window_icon()
+        .ok_or_else(|| "window icon missing".to_string())?
+        .clone();
+
+    TrayIconBuilder::with_id("main")
+        .icon(icon)
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => toggle_main(app),
+            "pause" => {
+                let s = app.state::<AppState>();
+                let snap = {
+                    let mut cfg = s.settings.lock().unwrap_or_else(|e| e.into_inner());
+                    cfg.paused = !cfg.paused;
+                    cfg.clone()
+                };
+                let h = s.history.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                let _ = store::save(app, &h, &snap);
+                let _ = app.emit("history-changed", ());
+            }
+            "clear" => {
+                let s = app.state::<AppState>();
+                let (h, cfg) = {
+                    let mut hist = s.history.lock().unwrap_or_else(|e| e.into_inner());
+                    hist.retain(|e| e.favorite);
+                    (hist.clone(), s.settings.lock().unwrap_or_else(|e| e.into_inner()).clone())
+                };
+                let _ = store::save(app, &h, &cfg);
+                let _ = app.emit("history-changed", ());
+            }
+            "quit" => {
+                USER_QUIT.store(true, Ordering::SeqCst);
+                log_line(app, "quit: tray menu");
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                toggle_main(tray.app_handle());
+            }
+        })
+        .build(app)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 托盘对象丢失就整体重建；refresh=true 时顺手刷新图标，
+/// 应对资源管理器重启后「进程还活着，但通知区域图标被清掉」的情况。
+fn ensure_tray(app: &tauri::AppHandle, refresh: bool) {
+    if let Some(tray) = app.tray_by_id("main") {
+        if refresh {
+            if let Some(icon) = app.default_window_icon() {
+                let _ = tray.set_icon(Some(icon.clone()));
+            }
+        }
+        return;
+    }
+    log_line(app, "tray-missing -> rebuild");
+    let hotkey = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .hotkey
+        .clone();
+    match build_tray(app, &hotkey) {
+        Ok(_) => log_line(app, "tray-rebuilt"),
+        Err(e) => log_line(app, &format!("tray-rebuild-failed: {}", e)),
+    }
+}
+
+/// 每分钟一行心跳。日志尾部可直接区分：进程崩溃 / 被要求退出 / 进程仍在运行。
+fn start_heartbeat(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let mut n: u64 = 0;
+        loop {
+            std::thread::sleep(Duration::from_secs(60));
+            if USER_QUIT.load(Ordering::SeqCst) {
+                break;
+            }
+            n += 1;
+            let (tick, entries) = {
+                let s = app.state::<AppState>();
+                let t = s.last_tick.load(Ordering::SeqCst);
+                let n = s.history.lock().unwrap_or_else(|e| e.into_inner()).len();
+                (t, n)
+            };
+            log_line(&app, &format!("alive #{} tick={} entries={}", n, tick, entries));
+            ensure_tray(&app, false);
+        }
+    });
 }
 
 fn parse_code(raw: &str) -> Option<Code> {
@@ -208,7 +366,7 @@ pub fn auto_paste() {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let built = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main(app);
         }))
@@ -227,6 +385,7 @@ pub fn run() {
         )
         .setup(|app| {
             let handle = app.handle().clone();
+            install_panic_hook(store::data_dir(&handle).join("leonpaste.log"));
             let (history, settings) = store::load(&handle);
             log_line(&handle, "setup-start");
             let hotkey = settings.hotkey.clone();
@@ -243,62 +402,7 @@ pub fn run() {
                 let _ = handle.autolaunch().enable();
             }
 
-            let show_i = MenuItem::with_id(app, "show", "显示 / 隐藏", true, None::<&str>)?;
-            let pause_i = MenuItem::with_id(app, "pause", "暂停 / 恢复记录", true, None::<&str>)?;
-            let clear_i = MenuItem::with_id(app, "clear", "清空历史（保留收藏）", true, None::<&str>)?;
-            let quit_i = MenuItem::with_id(app, "quit", "退出 leonPaste", true, None::<&str>)?;
-            let sep = PredefinedMenuItem::separator(app)?;
-            let status_i = MenuItem::with_id(
-                app,
-                "status",
-                &format!("leonPaste {} · 后台运行中 · {} 唤起", env!("CARGO_PKG_VERSION"), hotkey),
-                false,
-                None::<&str>,
-            )?;
-            let menu = Menu::with_items(app, &[&status_i, &sep, &show_i, &pause_i, &clear_i, &sep, &quit_i])?;
-
-            let tray_result = TrayIconBuilder::new()
-                .icon(app.default_window_icon().expect("window icon").clone())
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => toggle_main(app),
-                    "pause" => {
-                        let s = app.state::<AppState>();
-                        let snap = {
-                            let mut cfg = s.settings.lock().unwrap();
-                            cfg.paused = !cfg.paused;
-                            cfg.clone()
-                        };
-                        let h = s.history.lock().unwrap().clone();
-                        let _ = store::save(app, &h, &snap);
-                        let _ = app.emit("history-changed", ());
-                    }
-                    "clear" => {
-                        let s = app.state::<AppState>();
-                        let (h, cfg) = {
-                            let mut hist = s.history.lock().unwrap();
-                            hist.retain(|e| e.favorite);
-                            (hist.clone(), s.settings.lock().unwrap().clone())
-                        };
-                        let _ = store::save(app, &h, &cfg);
-                        let _ = app.emit("history-changed", ());
-                    }
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        toggle_main(tray.app_handle());
-                    }
-                })
-                .build(app);
-            match tray_result {
+            match build_tray(&handle, &hotkey) {
                 Ok(_) => log_line(&handle, "tray-ok"),
                 Err(e) => log_line(&handle, &format!("tray-failed: {}", e)),
             }
@@ -319,6 +423,20 @@ pub fn run() {
 
             clipboard::start_monitor(handle.clone());
             log_line(&handle, "monitor-started");
+            if let Some(w) = app.get_webview_window("main") {
+                let h = handle.clone();
+                w.on_window_event(move |ev| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = ev {
+                        api.prevent_close();
+                        if let Some(win) = h.get_webview_window("main") {
+                            let _ = win.hide();
+                        }
+                        log_line(&h, "window-close prevented -> hidden");
+                    }
+                });
+            }
+            start_heartbeat(handle.clone());
+            log_line(&handle, "heartbeat-started");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -336,6 +454,23 @@ pub fn run() {
             commands::sync_clipboard,
             commands::list_all,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+    let exit_handle = built.handle().clone();
+    built.run(|app_handle, event| match event {
+        tauri::RunEvent::ExitRequested { api, .. } => {
+            if USER_QUIT.load(Ordering::SeqCst) {
+                log_line(app_handle, "exit: tray menu requested");
+            } else {
+                log_line(app_handle, "exit: blocked unexpected ExitRequested");
+                api.prevent_exit();
+            }
+        }
+        tauri::RunEvent::WindowEvent {
+            event: tauri::WindowEvent::Destroyed,
+            ..
+        } => log_line(app_handle, "window-destroyed (kept alive)"),
+        _ => {}
+    });
+    log_line(&exit_handle, "exit: event loop ended");
 }

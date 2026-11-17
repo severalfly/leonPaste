@@ -44,19 +44,19 @@ pub fn process_capture(app: &tauri::AppHandle, cap: clip::Capture) -> bool {
     let sig = cap.signature();
 
     if state.suppress.swap(false, Ordering::SeqCst) {
-        *state.last_sig.lock().unwrap() = sig;
+        *state.last_sig.lock().unwrap_or_else(|e| e.into_inner()) = sig;
         log_line(app, "skip: own write-back");
         return false;
     }
     {
-        let mut last = state.last_sig.lock().unwrap();
+        let mut last = state.last_sig.lock().unwrap_or_else(|e| e.into_inner());
         if *last == sig {
             return false;
         }
         *last = sig;
     }
 
-    let settings = { state.settings.lock().unwrap().clone() };
+    let settings = { state.settings.lock().unwrap_or_else(|e| e.into_inner()).clone() };
     if settings.paused {
         log_line(app, "skip: paused");
         return false;
@@ -119,7 +119,7 @@ pub fn process_capture(app: &tauri::AppHandle, cap: clip::Capture) -> bool {
         clip::Capture::Empty | clip::Capture::Busy => return false,
     }
 
-    let mut history = state.history.lock().unwrap();
+    let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
     if history.iter().rev().take(1).any(|e| e.text == entry.text) {
         log_line(app, "skip: duplicate");
         return false;
@@ -139,12 +139,15 @@ pub fn start_monitor(app: tauri::AppHandle) {
     log_line(&app, "monitor-start (background thread)");
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(180));
-        {
-            let state = app.state::<AppState>();
-            state.last_tick.store(secs(), Ordering::SeqCst);
-        }
-        crate::stats::note_tick();
-        let cap = clip::read();
-        process_capture(&app, cap);
+        let a = app.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            {
+                let state = a.state::<AppState>();
+                state.last_tick.store(secs(), Ordering::SeqCst);
+            }
+            crate::stats::note_tick();
+            let cap = clip::read();
+            process_capture(&a, cap);
+        }));
     });
 }
