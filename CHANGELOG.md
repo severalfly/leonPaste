@@ -2,6 +2,26 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-11-17
+
+### 存储层迁移到 SQLite（含图片自动清理）
+
+用户指出「过期的截图会不会自动删除」并建议统一改用 SQLite。查明：
+
+- 过期 / 超限清理走 `store::prune()`，只把条目从内存列表移除再重写 `history.json`，`data/images/*.dib / *.bmp` **一个都不删**；`remove_images()` 只在手动「单条删除」「清空历史」时调用。
+- 捕获图片时先写两个文件、之后才判重，重复内容直接 return 会留下孤儿文件。
+- 每次捕获都把整个 `history.json` 全量序列化 + tmp/rename 重写，条目越多越慢；条目与图片两套存储没有一致性保障。
+
+改造：
+
+- 新增 `rusqlite`（`bundled` 静态链接，便携版无需额外 DLL），数据统一存到 `data/leonpaste.db`：
+  - `entries` 表：id / kind / text / preview / favorite / created_at / source / **image BLOB（原 DIB）** / **thumb BLOB（缩略图 BMP）** / 宽高，`created_at` 建索引。
+  - `settings` 表：单行 JSON 文本。
+- **图片不再落盘**：捕获时原图与缩略图直接随条目写进 BLOB；删除 / 清空 / 过期 / 超限时 `DELETE` 一行即同时删图，**过期的截图现在会自动删除**，也不再有孤儿文件。`prune()` 改为 SQL 删除（收藏永不过期，非收藏按时间与数量上限清理）。
+- 所有写操作改为增量 SQL：`insert` / `set_favorite` / `delete` / `clear_non_favorites` / `save_settings`；内存只缓存元数据，图片按需从 DB 读取（`load_image` / `load_thumbs` 批量）。
+- **一次性迁移**：首次启动若 DB 为空且存在旧 `history.json`，把条目、设置以及 `images/` 里的 DIB/BMP 全部导入，成功后删除旧 JSON 与整个 `images/` 目录（顺带回收历史遗留的孤儿文件），日志写 `db-migrated N entries from legacy json`。
+- 前端 `Entry` 结构不变；便携模式仍只写同目录 `data/`。
+
 ## [0.3.7] - 2026-11-17
 
 ### 修复：0xC0000005 根因（剪贴板裸指针读取）

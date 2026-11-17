@@ -21,7 +21,7 @@ pub struct Entry {
     pub favorite: bool,
     pub created_at: u64,
     pub source: String,
-    /// 原图 DIB 文件名（data/images/<id>.dib），用于写回剪贴板
+    /// 有值时表示数据库里存了原图 DIB BLOB，用于写回剪贴板
     pub image: Option<String>,
     /// 缩略图 data URL，仅在 list_history 返回时填充，不持久化
     pub thumb: Option<String>,

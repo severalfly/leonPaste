@@ -4,7 +4,6 @@ use crate::{
     AppState,
 };
 use std::{
-    fs,
     sync::atomic::Ordering,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -65,6 +64,8 @@ pub fn process_capture(app: &tauri::AppHandle, cap: clip::Capture) -> bool {
     let id = format!("e{}", millis());
     let mut entry = Entry::blank();
     entry.id = id.clone();
+    let mut image_blob: Option<Vec<u8>> = None;
+    let mut thumb_blob: Option<Vec<u8>> = None;
     entry.created_at = now();
     entry.source = crate::foreground_title();
 
@@ -94,18 +95,15 @@ pub fn process_capture(app: &tauri::AppHandle, cap: clip::Capture) -> bool {
                 Some(v) => v,
                 None => return false,
             };
-            let dir = store::data_dir(app).join("images");
-            if fs::create_dir_all(&dir).is_err() {
-                return false;
-            }
-            let _ = fs::write(dir.join(format!("{}.dib", id)), &d);
-            let _ = fs::write(dir.join(format!("{}.bmp", id)), &bmp);
+            // 图片直接随条目进 SQLite BLOB，不再落盘成散落文件
+            thumb_blob = Some(bmp);
             entry.kind = EntryKind::Image;
-            entry.image = Some(format!("{}.dib", id));
+            entry.image = Some("db".into());
             entry.image_width = info.width;
             entry.image_height = info.height;
             entry.preview = format!("图片 · {}×{}", info.width, info.height);
             entry.text = format!("image:{}", dib::hash(&d));
+            image_blob = Some(d);
         }
         clip::Capture::Files(files) => {
             let first = files
@@ -119,16 +117,21 @@ pub fn process_capture(app: &tauri::AppHandle, cap: clip::Capture) -> bool {
         clip::Capture::Empty | clip::Capture::Busy => return false,
     }
 
-    let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
-    if history.iter().rev().take(1).any(|e| e.text == entry.text) {
-        log_line(app, "skip: duplicate");
+    {
+        let history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+        if history.iter().rev().take(1).any(|e| e.text == entry.text) {
+            log_line(app, "skip: duplicate");
+            return false;
+        }
+    }
+    if let Err(e) = store::insert(app, &entry, image_blob.as_deref(), thumb_blob.as_deref()) {
+        log_line(app, &format!("db-insert-failed: {}", e));
         return false;
     }
-    history.push(entry);
-    store::prune(&mut history, &settings);
-    let snapshot = history.clone();
-    drop(history);
-    let _ = store::save(app, &snapshot, &settings);
+    let _ = store::prune(app, &settings);
+    if let Ok(list) = store::load_entries(app) {
+        *state.history.lock().unwrap_or_else(|e| e.into_inner()) = list;
+    }
     crate::stats::note_capture();
     log_line(app, "captured");
     let _ = app.emit("history-changed", ());

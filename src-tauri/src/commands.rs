@@ -8,16 +8,21 @@ use std::sync::atomic::Ordering;
 use tauri::{Emitter, State};
 
 fn fill_thumbs(app: &tauri::AppHandle, items: &mut [Entry]) {
-    let dir = store::data_dir(app).join("images");
+    let ids: Vec<String> = items
+        .iter()
+        .filter(|e| e.image.is_some())
+        .map(|e| e.id.clone())
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    let thumbs = store::load_thumbs(app, &ids);
     for e in items.iter_mut() {
-        if let Some(name) = &e.image {
-            let stem = name.trim_end_matches(".dib");
-            if let Ok(b) = std::fs::read(dir.join(format!("{}.bmp", stem))) {
-                e.thumb = Some(format!(
-                    "data:image/bmp;base64,{}",
-                    base64::engine::general_purpose::STANDARD.encode(&b)
-                ));
-            }
+        if let Some(b) = thumbs.get(&e.id) {
+            e.thumb = Some(format!(
+                "data:image/bmp;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(b)
+            ));
         }
     }
 }
@@ -80,9 +85,8 @@ pub fn paste_entry(
             .ok_or_else(|| "找不到该条目".to_string())?
     };
     state.suppress.store(true, Ordering::SeqCst);
-    if let Some(name) = &entry.image {
-        let p = store::data_dir(&app).join("images").join(name);
-        let d = std::fs::read(p).map_err(|e| e.to_string())?;
+    if entry.image.is_some() {
+        let d = store::load_image(&app, &id).map_err(|e| e.to_string())?;
         if !dib::write_clipboard_dib(&d) {
             return Err("写入图片剪贴板失败".to_string());
         }
@@ -104,40 +108,36 @@ pub fn paste_entry(
 
 #[tauri::command]
 pub fn toggle_favorite(app: tauri::AppHandle, state: State<'_, AppState>, id: String) {
-    let (snapshot, settings) = {
+    let next = {
         let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(e) = history.iter_mut().find(|e| e.id == id) {
+        history.iter_mut().find(|e| e.id == id).map(|e| {
             e.favorite = !e.favorite;
-        }
-        (history.clone(), state.settings.lock().unwrap_or_else(|e| e.into_inner()).clone())
+            e.favorite
+        })
     };
-    let _ = store::save(&app, &snapshot, &settings);
+    if let Some(v) = next {
+        let _ = store::set_favorite(&app, &id, v);
+    }
     let _ = app.emit("history-changed", ());
 }
 
 #[tauri::command]
 pub fn delete_entry(app: tauri::AppHandle, state: State<'_, AppState>, id: String) {
-    let (removed, snapshot, settings) = {
+    {
         let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
-        let removed: Vec<Entry> = history.iter().filter(|e| e.id == id).cloned().collect();
         history.retain(|e| e.id != id);
-        (removed, history.clone(), state.settings.lock().unwrap_or_else(|e| e.into_inner()).clone())
-    };
-    store::remove_images(&app, &removed);
-    let _ = store::save(&app, &snapshot, &settings);
+    }
+    let _ = store::delete(&app, &id);
     let _ = app.emit("history-changed", ());
 }
 
 #[tauri::command]
 pub fn clear_history(app: tauri::AppHandle, state: State<'_, AppState>) {
-    let (removed, snapshot, settings) = {
+    {
         let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
-        let removed: Vec<Entry> = history.iter().filter(|e| !e.favorite).cloned().collect();
         history.retain(|e| e.favorite);
-        (removed, history.clone(), state.settings.lock().unwrap_or_else(|e| e.into_inner()).clone())
-    };
-    store::remove_images(&app, &removed);
-    let _ = store::save(&app, &snapshot, &settings);
+    }
+    let _ = store::clear_non_favorites(&app);
     let _ = app.emit("history-changed", ());
 }
 
@@ -171,8 +171,7 @@ pub fn save_settings(
         let mut guard = state.settings.lock().unwrap_or_else(|e| e.into_inner());
         *guard = settings.clone();
     }
-    let history = { state.history.lock().unwrap_or_else(|e| e.into_inner()).clone() };
-    store::save(&app, &history, &settings)?;
+    store::save_settings(&app, &settings)?;
     let _ = app.emit("settings-changed", ());
     Ok(())
 }

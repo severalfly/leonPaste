@@ -60,7 +60,8 @@ writeFileSync(join(out, 'README.txt'), `leonPaste ${version} - Windows 便携版
 【托盘】右键可暂停记录、清空历史、退出
 
 【便携模式】同目录存在 portable.dat 即为便携模式，
-历史、设置、图片保存在同目录 data\\ 下，不写注册表、不写 %APPDATA%。
+历史、设置、图片统一保存在同目录 data\\leonpaste.db（SQLite）里，不写注册表、不写 %APPDATA%；
+过期条目连同图片会自动删除，不再产生散落的图片文件。
 删除 portable.dat 则改为标准模式。
 
 【运行要求】Windows 10 (1803+) / Windows 11 x64。

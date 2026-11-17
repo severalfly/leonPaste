@@ -115,6 +115,14 @@
 
 修复：新增 `copy_global()`，改用 `ReadProcessMemory(GetCurrentProcess(), ...)` 从自身进程安全复制，内核会做地址探测，指针失效只返回 FALSE 而不会崩溃；文本改为复制出字节后按 `u16::from_le_bytes` 解码，位图 / HDROP 同样走安全复制。所有剪贴板读写先取全局互斥锁，后台线程与主线程不再并发；保留双路径是因为窗口隐藏时 WebView2 会节流 JS 定时器，后台线程才能保证持续捕获。`LAST_OP` 记录崩溃前阶段，SEH 日志现在带 `last_op=N`（0 空闲 / 1 打开剪贴板 / 2 文件列表 / 3 文本 / 4 位图）。
 
+## 0.4.0 存储层迁到 SQLite（过期截图会自动删除）
+
+**过期的截图以前不会自动删除**：`prune()` 只把条目从内存列表移除再重写 `history.json`，`data/images/*.dib / *.bmp` 一个都不删；`remove_images()` 只在手动删除 / 清空时调用。而且捕获图片时先写文件、之后才判重，重复内容会留下孤儿文件。
+
+现在数据统一存到 `data/leonpaste.db`（`rusqlite` bundled 静态链接，便携版无需额外 DLL）：条目与设置进表，**原图 DIB 和缩略图 BMP 直接存 BLOB 和条目同一行**。删除 / 清空 / 过期 / 超限时 `DELETE` 一行即同时删掉图片 —— **过期的截图现在会自动删除**，也不会再有孤儿文件。所有写操作改成增量 SQL，不再每次全量重写整个历史；内存只缓存元数据，图片按需读取。
+
+首次启动会自动把旧 `history.json`、`settings.json` 和 `images/` 里的图片导入 DB，成功后删除旧 JSON 与整个图片目录（顺带回收历史堆积的孤儿文件），日志会写 `db-migrated N entries from legacy json`。前端结构不变，历史记录完整保留。
+
 ## 权限与排查
 
 leonPaste 是 Win32 桌面程序，读取剪贴板**不需要**管理员权限，也不需要 Windows「隐私 → 剪贴板」里的任何开关（那些只管 UWP 应用、剪贴板历史与云同步）。Win11 自带 WebView2；Win10 首次启动会提示安装运行时。

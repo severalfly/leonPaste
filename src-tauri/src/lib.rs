@@ -244,18 +244,16 @@ fn build_tray(app: &tauri::AppHandle, hotkey: &str) -> Result<(), String> {
                     cfg.paused = !cfg.paused;
                     cfg.clone()
                 };
-                let h = s.history.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                let _ = store::save(app, &h, &snap);
+                let _ = store::save_settings(app, &snap);
                 let _ = app.emit("history-changed", ());
             }
             "clear" => {
                 let s = app.state::<AppState>();
-                let (h, cfg) = {
+                {
                     let mut hist = s.history.lock().unwrap_or_else(|e| e.into_inner());
                     hist.retain(|e| e.favorite);
-                    (hist.clone(), s.settings.lock().unwrap_or_else(|e| e.into_inner()).clone())
-                };
-                let _ = store::save(app, &h, &cfg);
+                }
+                let _ = store::clear_non_favorites(app);
                 let _ = app.emit("history-changed", ());
             }
             "quit" => {
