@@ -1,5 +1,5 @@
 use crate::{
-    dib, store,
+    clip, dib, store,
     types::{Entry, Settings},
     AppState,
 };
@@ -87,8 +87,9 @@ pub fn paste_entry(
             return Err("写入图片剪贴板失败".to_string());
         }
     } else {
-        clipboard_win::set_clipboard_string(&entry.text)
-            .map_err(|_| "写入剪贴板失败".to_string())?;
+        if !clip::write_text(&entry.text) {
+            return Err("写入剪贴板失败".to_string());
+        }
     }
     let auto_paste = { state.settings.lock().unwrap().auto_paste };
     crate::hide_main(&app);
@@ -179,4 +180,70 @@ pub fn save_settings(
 #[tauri::command]
 pub fn hide_window(app: tauri::AppHandle) {
     crate::hide_main(&app);
+}
+
+#[derive(serde::Serialize)]
+pub struct Diagnostics {
+    pub version: String,
+    pub product: String,
+    pub developer: String,
+    pub license: String,
+    pub repository: String,
+    pub build_target: String,
+    pub data_dir: String,
+    pub entries: usize,
+    pub monitor_alive: bool,
+    pub last_tick_ago: u64,
+    pub hotkey: String,
+    pub paused: bool,
+    pub portable: bool,
+    pub log_tail: Vec<String>,
+}
+
+fn secs_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+#[tauri::command]
+pub fn get_diagnostics(app: tauri::AppHandle, state: State<'_, AppState>) -> Diagnostics {
+    let dir = store::data_dir(&app);
+    let tick = state.last_tick.load(std::sync::atomic::Ordering::SeqCst);
+    let ago = secs_now().saturating_sub(tick);
+    let settings = { state.settings.lock().unwrap().clone() };
+    let entries = { state.history.lock().unwrap().len() };
+    let log_tail = std::fs::read_to_string(dir.join("leonpaste.log"))
+        .map(|s| {
+            let lines: Vec<String> = s.lines().map(|l| l.to_string()).collect();
+            lines.iter().rev().take(12).cloned().rev().collect()
+        })
+        .unwrap_or_default();
+    let portable = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("portable.dat").exists()))
+        .unwrap_or(false);
+    Diagnostics {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        product: "leonPaste".into(),
+        developer: "severalfly".into(),
+        license: "MIT".into(),
+        repository: "https://github.com/severalfly/leonPaste".into(),
+        build_target: "x86_64-pc-windows-gnu".into(),
+        data_dir: dir.to_string_lossy().to_string(),
+        entries,
+        monitor_alive: tick > 0 && ago < 5,
+        last_tick_ago: ago,
+        hotkey: settings.hotkey,
+        paused: settings.paused,
+        portable,
+        log_tail,
+    }
+}
+
+#[tauri::command]
+pub fn open_data_dir(app: tauri::AppHandle) {
+    let dir = store::data_dir(&app);
+    let _ = std::process::Command::new("explorer.exe").arg(dir).spawn();
 }

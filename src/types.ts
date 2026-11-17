@@ -24,3 +24,20 @@ export interface Settings {
   ignore_regex: string
   paused: boolean
 }
+
+export interface Diagnostics {
+  version: string
+  product: string
+  developer: string
+  license: string
+  repository: string
+  build_target: string
+  data_dir: string
+  entries: number
+  monitor_alive: boolean
+  last_tick_ago: number
+  hotkey: string
+  paused: boolean
+  portable: boolean
+  log_tail: string[]
+}

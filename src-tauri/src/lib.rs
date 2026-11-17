@@ -1,3 +1,4 @@
+mod clip;
 mod clipboard;
 mod dib;
 mod commands;
@@ -7,7 +8,10 @@ pub mod types;
 use crate::types::{Entry, Settings};
 use std::{
     io::Write,
-    sync::{atomic::AtomicBool, Mutex},
+    sync::{
+        atomic::{AtomicBool, AtomicU64},
+        Mutex,
+    },
 };
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -21,6 +25,7 @@ pub struct AppState {
     pub history: Mutex<Vec<Entry>>,
     pub settings: Mutex<Settings>,
     pub suppress: AtomicBool,
+    pub last_tick: AtomicU64,
 }
 
 pub fn show_main(app: &tauri::AppHandle) {
@@ -144,6 +149,7 @@ pub fn run() {
                 history: Mutex::new(history),
                 settings: Mutex::new(settings),
                 suppress: AtomicBool::new(false),
+                last_tick: AtomicU64::new(0),
             });
 
             if autostart_on {
@@ -207,6 +213,16 @@ pub fn run() {
                 Ok(_) => log_line(&handle, "hotkey-ok"),
                 Err(e) => log_line(&handle, &format!("hotkey-failed: {}", e)),
             }
+            let first_run = !store::data_dir(&handle).join("settings.json").exists();
+            if first_run {
+                let h = handle.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1100));
+                    show_main(&h);
+                    crate::log_line(&h, "first-run panel shown");
+                });
+            }
+
             clipboard::start_monitor(handle.clone());
             log_line(&handle, "monitor-started");
             Ok(())
@@ -220,6 +236,8 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::hide_window,
+            commands::get_diagnostics,
+            commands::open_data_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

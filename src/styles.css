@@ -345,3 +345,52 @@ button { cursor: pointer; color: inherit; }
   .dock, .card, .drawer { animation: none; }
   .card { transition: none; }
 }
+
+.about {
+  margin-top: 4px;
+  padding: 11px 13px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.about-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.mini {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--dim);
+  border-radius: 6px;
+  padding: 2px 9px;
+  font-size: 11px;
+}
+.mini:hover { color: var(--text); border-color: var(--accent); }
+.about-grid { display: flex; flex-direction: column; gap: 5px; font-size: 11.5px; color: var(--dim); }
+.about-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.repo { color: var(--accent); word-break: break-all; }
+.diag-line { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: 0 0 7px; }
+.status-dot.ok { background: #62c48a; }
+.status-dot.bad { background: #e06565; }
+.dir-row { display: flex; align-items: center; gap: 8px; }
+.dir { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: text; }
+.logbox summary { cursor: pointer; font-size: 11.5px; }
+.logbox pre {
+  margin: 6px 0 0;
+  max-height: 108px;
+  overflow: auto;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: var(--dock-solid);
+  border: 1px solid var(--border);
+  font: 10.5px/1.45 "Cascadia Code", "Consolas", monospace;
+  color: var(--dim);
+  user-select: text;
+}
+.about-loading { font-size: 11.5px; color: var(--dim); }
+.drawer-body { padding-bottom: 16px; }

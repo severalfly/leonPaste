@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { Entry, Settings } from './types'
+import type { Diagnostics, Entry, Settings } from './types'
 
 const defaultSettings: Settings = {
   max_items: 500,
@@ -22,6 +22,22 @@ const items = ref<Entry[]>([])
 const selected = ref(0)
 const settings = ref<Settings>({ ...defaultSettings })
 const showSettings = ref(false)
+const diag = ref<Diagnostics | null>(null)
+
+async function loadDiagnostics() {
+  try {
+    diag.value = await invoke<Diagnostics>('get_diagnostics')
+  } catch {
+    diag.value = null
+  }
+}
+function openSettings() {
+  showSettings.value = true
+  loadDiagnostics()
+}
+async function openDir() {
+  await invoke('open_data_dir')
+}
 const searchEl = ref<HTMLInputElement | null>(null)
 const trackEl = ref<HTMLElement | null>(null)
 const unlisteners: Array<() => void> = []
@@ -267,7 +283,7 @@ onUnmounted(() => {
         >{{ f.label }}</button>
         <button class="filter star-filter" :class="{ active: favoritesOnly }" title="只看收藏" @click="favoritesOnly = !favoritesOnly">★</button>
       </nav>
-      <button class="gear" title="设置" @click="showSettings = !showSettings">⚙</button>
+      <button class="gear" title="设置" @click="openSettings">⚙</button>
     </header>
 
     <div class="track-wrap">
@@ -350,6 +366,35 @@ onUnmounted(() => {
         <label class="field column"><span>忽略关键词（每行一个，命中则不记录）</span>
           <textarea v-model="settings.ignore_regex" rows="2" placeholder="密码 / 令牌 / 密钥"></textarea>
         </label>
+
+        <div class="about">
+          <div class="about-head">
+            <span>关于与诊断</span>
+            <button class="mini" @click="loadDiagnostics">刷新</button>
+          </div>
+          <div v-if="diag" class="about-grid">
+            <div class="about-title">{{ diag.product }} {{ diag.version }}</div>
+            <div>开发者 {{ diag.developer }} · {{ diag.license }} 许可 · 构建 {{ diag.build_target }}</div>
+            <div class="repo">{{ diag.repository }}</div>
+            <div class="diag-line">
+              <span class="status-dot" :class="diag.monitor_alive ? 'ok' : 'bad'"></span>
+              监听{{ diag.monitor_alive ? '正常' : '异常' }}（{{ diag.last_tick_ago }}s 前心跳）
+              · 已记录 {{ diag.entries }} 条
+              · {{ diag.paused ? '已暂停' : '记录中' }}
+              · {{ diag.portable ? '便携模式' : '标准模式' }}
+              · 热键 {{ diag.hotkey }}
+            </div>
+            <div class="dir-row">
+              <span class="dir" :title="diag.data_dir">{{ diag.data_dir }}</span>
+              <button class="mini" @click="openDir">打开目录</button>
+            </div>
+            <details class="logbox">
+              <summary>最近日志（{{ diag.log_tail.length }} 行）</summary>
+              <pre><div v-for="(l, i) in diag.log_tail" :key="i">{{ l }}</div></pre>
+            </details>
+          </div>
+          <div v-else class="about-loading">读取诊断信息…</div>
+        </div>
       </div>
       <div class="drawer-foot">
         <button class="danger" @click="clearAll">清空历史（保留收藏）</button>
