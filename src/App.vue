@@ -334,7 +334,7 @@ function onBlur() {
   if (!settings.value.focus_hide) return
   if (Date.now() - shownAt < 450) return
   window.setTimeout(() => {
-    if (!document.hasFocus() && !showSettings.value) dismiss()
+    if (!document.hasFocus()) dismiss()
   }, 120)
 }
 
@@ -358,6 +358,7 @@ onMounted(async () => {
       filter.value = settings.value.default_filter || 'all'
       favoritesOnly.value = false
       showSettings.value = false
+      capturingHotkey.value = false
       refresh()
       loadDiagnostics()
       focusSearch()
