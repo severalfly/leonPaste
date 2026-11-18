@@ -12,12 +12,14 @@ CREATE TABLE IF NOT EXISTS entries (
   favorite INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   source TEXT NOT NULL,
+  last_used_at INTEGER NOT NULL DEFAULT 0,
   image BLOB,
   thumb BLOB,
   image_width INTEGER NOT NULL DEFAULT 0,
   image_height INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_entries_created ON entries(created_at);
+CREATE INDEX IF NOT EXISTS idx_entries_used ON entries(last_used_at);
 CREATE TABLE IF NOT EXISTS settings (
   k INTEGER PRIMARY KEY CHECK (k = 1),
   value TEXT NOT NULL
@@ -45,9 +47,11 @@ fn db_path(app: &tauri::AppHandle) -> PathBuf {
 }
 
 fn open(app: &tauri::AppHandle) -> R<Connection> {
+    let path = db_path(app);
     fs::create_dir_all(data_dir(app)).map_err(|e| e.to_string())?;
-    let c = E(Connection::open(db_path(app)))?;
-    E(c.execute_batch(SCHEMA))?;
+    let c = E(Connection::open(&path))?;
+    // journal_mode=WAL + synchronous=NORMAL 减少写盘/fsync 次数（崩溃安全仍保留）
+    let _ = c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=3000;");
     Ok(c)
 }
 
@@ -75,7 +79,7 @@ fn kind_parse(s: &str) -> EntryKind {
 }
 
 const SELECT_COLS: &str = "SELECT id, kind, text, preview, favorite, created_at, source, \
-     (image IS NOT NULL) AS has_image, image_width, image_height FROM entries";
+     (image IS NOT NULL) AS has_image, image_width, image_height, last_used_at FROM entries";
 
 fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<Entry> {
     let has_img: i64 = row.get(7)?;
@@ -91,6 +95,7 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<Entry> {
         thumb: None,
         image_width: row.get::<_, i64>(8)? as u32,
         image_height: row.get::<_, i64>(9)? as u32,
+        last_used_at: row.get::<_, i64>(10)? as u64,
     })
 }
 
@@ -137,8 +142,8 @@ pub fn insert(
     let c = open(app)?;
     E(c.execute(
         "INSERT OR REPLACE INTO entries \
-         (id, kind, text, preview, favorite, created_at, source, image, thumb, image_width, image_height) \
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+         (id, kind, text, preview, favorite, created_at, source, image, thumb, image_width, image_height, last_used_at) \
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             e.id,
             kind_str(&e.kind),
@@ -150,9 +155,16 @@ pub fn insert(
             image,
             thumb,
             e.image_width as i64,
-            e.image_height as i64
+            e.image_height as i64,
+            e.last_used_at as i64
         ],
     ))?;
+    Ok(())
+}
+
+pub fn mark_used(app: &tauri::AppHandle, id: &str, ts: u64) -> R<()> {
+    let c = open(app)?;
+    E(c.execute("UPDATE entries SET last_used_at = ?1 WHERE id = ?2", params![ts as i64, id]))?;
     Ok(())
 }
 
@@ -277,8 +289,8 @@ fn migrate_legacy(app: &tauri::AppHandle, c: &mut Connection) -> R<usize> {
         };
         E(tx.execute(
             "INSERT OR IGNORE INTO entries \
-             (id, kind, text, preview, favorite, created_at, source, image, thumb, image_width, image_height) \
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             (id, kind, text, preview, favorite, created_at, source, image, thumb, image_width, image_height, last_used_at) \
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 e.id,
                 kind_str(&e.kind),
@@ -290,7 +302,8 @@ fn migrate_legacy(app: &tauri::AppHandle, c: &mut Connection) -> R<usize> {
                 img,
                 th,
                 e.image_width as i64,
-                e.image_height as i64
+                e.image_height as i64,
+                e.last_used_at as i64
             ],
         ))?;
     }
@@ -314,6 +327,11 @@ pub fn load(app: &tauri::AppHandle) -> (Vec<Entry>, Settings) {
             return (Vec::new(), Settings::default());
         }
     };
+    if let Err(e) = c.execute_batch(SCHEMA) { // schema 只在启动建一次
+        crate::log_line(app, &format!("db-schema-failed: {}", e));
+    }
+    // 旧库补列（ALTER 幂等：已存在则忽略错误）
+    let _ = c.execute_batch("ALTER TABLE entries ADD COLUMN last_used_at INTEGER NOT NULL DEFAULT 0;");
     let count: i64 = c
         .query_row("SELECT COUNT(*) FROM entries", [], |r| r.get(0))
         .unwrap_or(0);

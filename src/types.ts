@@ -7,6 +7,7 @@ export interface Entry {
   preview: string
   favorite: boolean
   created_at: number
+  last_used_at?: number
   source: string
   image: string | null
   thumb: string | null

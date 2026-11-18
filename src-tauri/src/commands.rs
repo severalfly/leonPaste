@@ -85,6 +85,13 @@ pub fn paste_entry(
             .ok_or_else(|| "找不到该条目".to_string())?
     };
     state.suppress.store(true, Ordering::SeqCst);
+    // 记录最近使用时间：用过的候选项下次置顶
+    let used = crate::types::now();
+    let _ = store::mark_used(&app, &id, used);
+    {
+        let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(e) = history.iter_mut().find(|e| e.id == id) { e.last_used_at = used; }
+    }
     if entry.image.is_some() {
         let d = store::load_image(&app, &id).map_err(|e| e.to_string())?;
         if !dib::write_clipboard_dib(&d) {

@@ -66,7 +66,10 @@ const items = computed<Entry[]>(() => {
     if (f !== 'all' && String(e.kind).toLowerCase() !== f) return false
     return true
   })
-  out.sort((a, b) => Number(b.favorite) - Number(a.favorite) || b.created_at - a.created_at)
+  // 收藏优先，其次「最近使用」（用过的置顶），最后按创建时间
+  out.sort((a, b) => Number(b.favorite) - Number(a.favorite)
+    || (b.last_used_at || 0) - (a.last_used_at || 0)
+    || b.created_at - a.created_at)
   return out.slice(0, 200)
 })
 const total = computed(() => items.value.length)
@@ -144,6 +147,10 @@ async function pasteAt(i: number) {
   const item = items.value[i]
   if (!item) return
   selected.value = i
+  const used = Date.now() / 1000
+  item.last_used_at = used
+  const raw = allItems.value.find((e) => e.id === item.id)
+  if (raw) raw.last_used_at = used
   await invoke('paste_entry', { id: item.id })
 }
 async function toggleFavorite(item: Entry) {
@@ -282,17 +289,22 @@ function onPointerUp(e: PointerEvent) {
   window.removeEventListener('pointerup', onPointerUp)
   window.removeEventListener('pointercancel', onPointerUp)
   if (wasDrag || idx < 0 || cardIndexOf(e.target) !== idx) return
-  // 双击：同一张卡片 250ms 内只写回一次，避免粘贴两份
-  if (Date.now() - lastPointerPaste < 250 && lastPastedIndex === idx) return
-  lastPointerPaste = Date.now()
+  // 单击 = 选中高亮；双击（250ms 内同卡片）才粘贴
+  const now = Date.now()
+  if (now - lastPointerPaste < 250 && lastPastedIndex === idx) {
+    lastPointerPaste = 0
+    pasteAt(idx)
+    return
+  }
+  selected.value = idx
+  lastPointerPaste = now
   lastPastedIndex = idx
-  pasteAt(idx)
 }
-// click 只作为兜底：pointerup 已处理时按时间窗去重，避免重复写回剪贴板。
+// click 兜底：只选中，不粘贴（双击已由 pointerup 处理）
 function onTrackClick(e: MouseEvent) {
-  if (moved > 6 || Date.now() - lastPointerPaste < 400) return
+  if (moved > 6) return
   const i = cardIndexOf(e.target)
-  if (i >= 0) pasteAt(i)
+  if (i >= 0) selected.value = i
 }
 
 function onKey(e: KeyboardEvent) {
@@ -359,6 +371,7 @@ onMounted(async () => {
       favoritesOnly.value = false
       showSettings.value = false
       capturingHotkey.value = false
+      selected.value = 0
       refresh()
       loadDiagnostics()
       focusSearch()

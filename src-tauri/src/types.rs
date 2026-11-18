@@ -20,6 +20,8 @@ pub struct Entry {
     pub preview: String,
     pub favorite: bool,
     pub created_at: u64,
+    /// 最近一次被粘贴使用的时间（0 = 从未使用），用于「用过的置顶」
+    #[serde(default)] pub last_used_at: u64,
     pub source: String,
     /// 有值时表示数据库里存了原图 DIB BLOB，用于写回剪贴板
     pub image: Option<String>,
@@ -38,6 +40,7 @@ impl Entry {
             preview: String::new(),
             favorite: false,
             created_at: 0,
+            last_used_at: 0,
             source: String::new(),
             image: None,
             thumb: None,

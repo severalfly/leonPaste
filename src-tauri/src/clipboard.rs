@@ -128,9 +128,14 @@ pub fn process_capture(app: &tauri::AppHandle, cap: clip::Capture) -> bool {
         log_line(app, &format!("db-insert-failed: {}", e));
         return false;
     }
-    let _ = store::prune(app, &settings);
-    if let Ok(list) = store::load_entries(app) {
-        *state.history.lock().unwrap_or_else(|e| e.into_inner()) = list;
+    // 清理降频：每 32 次捕获才查一次过期/超限，避免频繁 COUNT + 扫描
+    let tick = crate::stats::CAPTURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if tick % 32 == 0 { let _ = store::prune(app, &settings); }
+    // 直接把新条目 push 到内存，不再全表 load_entries（省一次完整 DB 读）
+    {
+        let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
+        history.retain(|e| e.id != entry.id);
+        history.push(entry);
     }
     crate::stats::note_capture();
     log_line(app, "captured");
