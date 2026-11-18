@@ -66,10 +66,13 @@ const items = computed<Entry[]>(() => {
     if (f !== 'all' && String(e.kind).toLowerCase() !== f) return false
     return true
   })
-  // 收藏优先，其次「最近使用」（用过的置顶），最后按创建时间
+  // 收藏优先；其余按「最近活动时间」= max(创建时间, 最近使用时间)。
+  // 这样新复制的条目一定排在最前，用过的老条目也会临时提前，
+  // 不会被几条常用项永久压到列表后面（0.4.1 的排序有这个缺陷）。
+  const activity = (e: Entry) => Math.max(e.created_at || 0, e.last_used_at || 0)
   out.sort((a, b) => Number(b.favorite) - Number(a.favorite)
-    || (b.last_used_at || 0) - (a.last_used_at || 0)
-    || b.created_at - a.created_at)
+    || activity(b) - activity(a)
+    || (b.created_at || 0) - (a.created_at || 0))
   return out.slice(0, 200)
 })
 const total = computed(() => items.value.length)

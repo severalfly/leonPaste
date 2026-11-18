@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS entries (
   image_height INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_entries_created ON entries(created_at);
-CREATE INDEX IF NOT EXISTS idx_entries_used ON entries(last_used_at);
 CREATE TABLE IF NOT EXISTS settings (
   k INTEGER PRIMARY KEY CHECK (k = 1),
   value TEXT NOT NULL
@@ -327,11 +326,15 @@ pub fn load(app: &tauri::AppHandle) -> (Vec<Entry>, Settings) {
             return (Vec::new(), Settings::default());
         }
     };
-    if let Err(e) = c.execute_batch(SCHEMA) { // schema 只在启动建一次
+    // 建表（不含依赖新列的索引），再补列，最后才建索引 —— 顺序不能反，
+    // 否则 0.4.0 老库会因「no such column: last_used_at」导致整批 SQL 失败
+    if let Err(e) = c.execute_batch(SCHEMA) {
         crate::log_line(app, &format!("db-schema-failed: {}", e));
     }
-    // 旧库补列（ALTER 幂等：已存在则忽略错误）
     let _ = c.execute_batch("ALTER TABLE entries ADD COLUMN last_used_at INTEGER NOT NULL DEFAULT 0;");
+    if let Err(e) = c.execute_batch("CREATE INDEX IF NOT EXISTS idx_entries_used ON entries(last_used_at);") {
+        crate::log_line(app, &format!("db-index-failed: {}", e));
+    }
     let count: i64 = c
         .query_row("SELECT COUNT(*) FROM entries", [], |r| r.get(0))
         .unwrap_or(0);

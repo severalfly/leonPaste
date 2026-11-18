@@ -2,6 +2,19 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.2] - 2026-11-18
+
+### 修复
+
+- **复制之后候选框里没有列出来（0.4.1 回归）**：0.4.1 为「用过的置顶」把排序改成 `收藏 > last_used_at > created_at`，用过一次的条目会**永久**排在所有新条目前面；历史一多，新复制的内容被挤到 200 条截断之外，看起来就像「没记录」。现在按「最近活动时间」`max(created_at, last_used_at)` 排序：新复制的永远在最前，用过的老条目也会临时提前，两者不再冲突。
+- **0.4.0 老库升级报 `db-schema-failed: no such column: last_used_at`**：`SCHEMA` 里 `CREATE INDEX ... ON entries(last_used_at)` 在 `ALTER TABLE ADD COLUMN` 之前执行，老库必然失败；而 `rusqlite::execute_batch` 中途报错会跳过剩余语句，导致 `CREATE TABLE settings` 也不执行。现在把建表、补列、建索引拆成独立三段并按依赖顺序执行，索引失败单独记日志不再影响主流程。
+- 捕获计数修正：`note_capture()` 与 `CAPTURES.fetch_add` 双重递增，让每 32 次降频清理的判断失真；改为 `note_capture()` 返回累加值。
+- 诊断日志降噪：180ms 轮询产生的 `skip: same signature` / `skip: clipboard empty` 不再逐条写盘，避免日志暴涨把关键事件挤出。
+
+### 排查记录
+
+真机复现（VM 上用真实的 0.4.0 老库 + 0.4.1）：日志出现 `db-schema-failed`；加临时分支日志后确认**捕获链路本身正常**（3 次复制都 `captured`，数据库里 3 条都在），问题只在前端排序导致新条目不可见。
+
 ## [0.4.1] - 2026-11-18
 
 ### 交互

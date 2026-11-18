@@ -39,6 +39,7 @@ pub fn process_capture(app: &tauri::AppHandle, cap: clip::Capture) -> bool {
         crate::stats::note_busy();
         return false;
     }
+    if matches!(cap, clip::Capture::Empty) { return false; }
     let state = app.state::<AppState>();
     let sig = cap.signature();
 
@@ -50,6 +51,7 @@ pub fn process_capture(app: &tauri::AppHandle, cap: clip::Capture) -> bool {
     {
         let mut last = state.last_sig.lock().unwrap_or_else(|e| e.into_inner());
         if *last == sig {
+            // 同签名是常态（180ms 轮询），不写日志避免刷屏
             return false;
         }
         *last = sig;
@@ -129,16 +131,16 @@ pub fn process_capture(app: &tauri::AppHandle, cap: clip::Capture) -> bool {
         return false;
     }
     // 清理降频：每 32 次捕获才查一次过期/超限，避免频繁 COUNT + 扫描
-    let tick = crate::stats::CAPTURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if tick % 32 == 0 { let _ = store::prune(app, &settings); }
+    // note_capture() 会递增 CAPTURES，这里用其返回值判断即可（不要重复 fetch_add）
+    let tick = crate::stats::note_capture();
+    if tick % 32 == 1 { let _ = store::prune(app, &settings); }
     // 直接把新条目 push 到内存，不再全表 load_entries（省一次完整 DB 读）
     {
         let mut history = state.history.lock().unwrap_or_else(|e| e.into_inner());
         history.retain(|e| e.id != entry.id);
-        history.push(entry);
+        history.push(entry.clone());
     }
-    crate::stats::note_capture();
-    log_line(app, "captured");
+    log_line(app, &format!("captured id={} text_len={}", entry.id, entry.text.len()));
     let _ = app.emit("history-changed", ());
     true
 }

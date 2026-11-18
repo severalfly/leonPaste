@@ -14,8 +14,8 @@ pub fn note_open() {
 pub fn note_busy() {
     BUSY.fetch_add(1, Ordering::Relaxed);
 }
-pub fn note_capture() {
-    CAPTURES.fetch_add(1, Ordering::Relaxed);
+pub fn note_capture() -> u64 {
+    CAPTURES.fetch_add(1, Ordering::Relaxed) + 1
 }
 
 pub static LIST_CALLS: AtomicU64 = AtomicU64::new(0);
